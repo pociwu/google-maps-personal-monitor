@@ -1,0 +1,10 @@
+[Unit]
+Description=Notify Telegram when the monitor service fails
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/maps-monitor
+ExecStart=/usr/bin/docker compose run --rm monitor notify-system-failure
+TimeoutStartSec=10min

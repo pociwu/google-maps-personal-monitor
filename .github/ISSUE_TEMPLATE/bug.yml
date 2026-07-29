@@ -1,0 +1,31 @@
+name: 錯誤回報
+description: 回報可重現的監控或儀表板問題
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: 問題描述
+      description: 請勿貼上 Token、真實 targets.yaml、完整資料庫或私人紀錄。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 重現步驟
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      placeholder: v0.2.0
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 預期結果
+    validations:
+      required: true

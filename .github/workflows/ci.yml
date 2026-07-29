@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install ".[test]"
+      - run: python -m compileall -q src tests
+      - run: ruff check src tests
+      - run: pytest
+      - name: Verify runtime data is not tracked
+        shell: bash
+        run: |
+          forbidden="$(git ls-files | grep -E '(^|/)(\.env$|targets\.yaml$|state/|.*\.sqlite3$)' || true)"
+          if [[ -n "$forbidden" ]]; then
+            echo "Forbidden runtime files are tracked:"
+            echo "$forbidden"
+            exit 1
+          fi
+
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update
+      - run: sudo apt-get install --yes shellcheck
+      - run: shellcheck deploy/*.sh
+
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+
+  arm64-image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: false
+          tags: maps-contributor-monitor:test

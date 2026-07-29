@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up Google Maps monitor data
+Requires=docker.service
+After=docker.service
+OnFailure=maps-monitor-failure.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/maps-monitor
+ExecStart=/usr/bin/docker compose run --rm monitor backup
+TimeoutStartSec=2h

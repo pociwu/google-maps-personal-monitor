@@ -1,0 +1,16 @@
+[Unit]
+Description=Google Maps contributor review monitor
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=maps-monitor-failure.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/maps-monitor
+ExecStart=/usr/bin/docker compose run --rm monitor run-and-send
+TimeoutStartSec=4h
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

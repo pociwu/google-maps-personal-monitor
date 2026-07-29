@@ -1,0 +1,66 @@
+services:
+  monitor:
+    build:
+      context: .
+    image: maps-contributor-monitor:0.2.0
+    platform: linux/arm64
+    user: "0:0"
+    init: true
+    shm_size: "1gb"
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    env_file:
+      - .env
+    volumes:
+      - ./config/targets.yaml:/app/config/targets.yaml:ro
+      - ./state:/app/state:rw
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+
+  web:
+    build:
+      context: .
+    image: maps-contributor-monitor:0.2.0
+    platform: linux/arm64
+    user: "0:0"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    env_file:
+      - .env
+    environment:
+      MAPS_MONITOR_DATABASE: /app/state/data/monitor.sqlite3
+      MAPS_MONITOR_IMAGE_DIR: /app/state/data/images
+    volumes:
+      - ./state:/app/state:ro
+    ports:
+      - "0.0.0.0:8000:8000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    entrypoint: ["uvicorn"]
+    command:
+      - maps_monitor.web:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --no-access-log
+      - --no-proxy-headers
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).read()"
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped

@@ -1,0 +1,13 @@
+[Unit]
+Description=Check due dense Google Maps date observations every 30 to 60 minutes
+
+[Timer]
+OnBootSec=15min
+OnUnitInactiveSec=30min
+RandomizedDelaySec=30min
+AccuracySec=1min
+Persistent=true
+Unit=maps-monitor-dense.service
+
+[Install]
+WantedBy=timers.target

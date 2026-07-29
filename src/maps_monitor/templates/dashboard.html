@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-Hant" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Google Maps 個人評論監控</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB"
+        crossorigin="anonymous">
+  <link rel="stylesheet" href="/static/dashboard.css">
+  <script src="/static/theme.js"></script>
+</head>
+<body>
+  <header class="border-bottom bg-body sticky-top">
+    <div class="container py-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
+      <div>
+        <h1 class="h4 mb-1">Google Maps 個人評論監控</h1>
+        <p class="text-body-secondary mb-0 small">公開貢獻者評論的唯讀觀察資料</p>
+      </div>
+      <a class="btn btn-outline-secondary btn-sm" href="{{ all_href }}">重新整理</a>
+    </div>
+  </header>
+
+  <main class="container py-4">
+    <section aria-labelledby="contributors-heading">
+      <div class="d-flex justify-content-between align-items-end mb-3">
+        <div>
+          <h2 id="contributors-heading" class="h5 mb-1">貢獻者</h2>
+          <p class="small text-body-secondary mb-0">最後更新：{{ last_updated }}</p>
+        </div>
+      </div>
+      <div class="contributor-strip pb-2">
+        <a class="contributor-card card text-decoration-none {% if not selected_contributor %}border-primary selected{% endif %}"
+           href="{{ all_href }}" {% if not selected_contributor %}aria-current="true"{% endif %}>
+          <div class="card-body">
+            <h3 class="h6">全部貢獻者</h3>
+            <p class="display-6 mb-0">{{ contributors|sum(attribute='total_count') }}</p>
+            <span class="small text-body-secondary">全部資料</span>
+          </div>
+        </a>
+        {% for person in contributors %}
+        <a class="contributor-card card text-decoration-none {% if selected_contributor == person.name %}border-primary selected{% endif %}"
+           href="{{ person.href }}" {% if selected_contributor == person.name %}aria-current="true"{% endif %}>
+          <div class="card-body">
+            <div class="d-flex justify-content-between gap-2">
+              <h3 class="h6 text-truncate" title="{{ person.name }}">{{ person.name }}</h3>
+              <span class="freshness-dot {{ person.freshness }}" aria-label="資料狀態：{{ person.freshness }}"></span>
+            </div>
+            <p class="mb-2"><strong>{{ person.total_count }}</strong> 筆</p>
+            <div class="small text-body-secondary">
+              有效 {{ person.active_count }} · 曾修改 {{ person.modified_count }}<br>
+              已刪除 {{ person.deleted_count }} · 僅評分 {{ person.rating_only_count }}<br>
+              巡查 {{ person.last_success_text }}
+            </div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% if contributors|selectattr('freshness', 'equalto', 'critical')|list %}
+      <div class="alert alert-danger mt-3 mb-0" role="status">
+        有監控對象超過 {{ critical_hours }} 小時未成功巡查，監控可能中斷。
+      </div>
+      {% elif contributors|selectattr('freshness', 'equalto', 'warning')|list %}
+      <div class="alert alert-warning mt-3 mb-0" role="status">
+        有監控對象超過 {{ warning_hours }} 小時未成功巡查，資料可能過期。
+      </div>
+      {% endif %}
+    </section>
+
+    <section class="mt-4" aria-labelledby="reviews-heading">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <h2 id="reviews-heading" class="h5 mb-0">評論清單 <span class="badge text-bg-secondary">{{ total }}</span></h2>
+      </div>
+      <form class="filter-panel card card-body mb-4" method="get" action="/">
+        {% if selected_contributor %}
+        <input type="hidden" name="contributor" value="{{ selected_contributor }}">
+        {% endif %}
+        <div class="row g-3 align-items-end">
+          <div class="col-12 col-lg-6">
+            <label class="form-label" for="q">搜尋店家或評論內容</label>
+            <input class="form-control" id="q" name="q" value="{{ search }}" maxlength="200">
+          </div>
+          <div class="col-6 col-md-4 col-lg-2">
+            <label class="form-label" for="status">狀態</label>
+            <select class="form-select auto-submit" id="status" name="status">
+              <option value="active" {% if status == 'active' %}selected{% endif %}>有效</option>
+              <option value="deleted" {% if status == 'deleted' %}selected{% endif %}>已刪除</option>
+              <option value="all" {% if status == 'all' %}selected{% endif %}>全部</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-4 col-lg-2">
+            <label class="form-label" for="rating">星等</label>
+            <select class="form-select auto-submit" id="rating" name="rating">
+              <option value="">全部</option>
+              {% for star in range(5, 0, -1) %}
+              <option value="{{ star }}" {% if rating == star %}selected{% endif %}>{{ star }} 星</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-12 col-md-4 col-lg-2 d-grid">
+            <button class="btn btn-primary" type="submit">套用</button>
+          </div>
+        </div>
+      </form>
+
+      {% if reviews %}
+      <div class="vstack gap-3">
+        {% for review in reviews %}
+        <article class="card review-card">
+          <div class="card-body">
+            <div class="d-flex flex-wrap justify-content-between gap-2 mb-2">
+              <div>
+                <p class="small text-body-secondary mb-1">{{ review.contributor_name }}</p>
+                <h3 class="h5 mb-0">{{ review.place_name }}</h3>
+              </div>
+              <div class="text-end">
+                <div class="rating" aria-label="{{ review.rating or 0 }} 顆星">
+                  {% for star in range(1, 6) %}<span aria-hidden="true">{% if review.rating and star <= review.rating %}★{% else %}☆{% endif %}</span>{% endfor %}
+                </div>
+                {% if review.rating_only %}<span class="badge text-bg-secondary">僅評分</span>{% endif %}
+                {% if review.modified %}<span class="badge text-bg-info">曾修改</span>{% endif %}
+                {% if review.status == 'deleted' %}<span class="badge text-bg-danger">已刪除</span>{% endif %}
+              </div>
+            </div>
+            <p class="review-body mb-3">{{ review.body if review.body else '（沒有文字）' }}</p>
+            <div class="small text-body-secondary d-flex flex-wrap gap-x-3 gap-y-1">
+              <span>{{ review.publish_text }}</span>
+              {% if review.modified or review.edit_date %}<span>{{ review.edit_text }}</span>{% endif %}
+            </div>
+            {% if review.images %}
+            <div class="review-images mt-3">
+              {% for image in review.images %}
+              <button class="image-button" type="button" data-bs-toggle="modal"
+                      data-bs-target="#imageModal" data-original="{{ image.original_url }}"
+                      aria-label="查看 {{ review.place_name }} 的第 {{ loop.index }} 張圖片">
+                <img src="{{ image.thumbnail_url }}" loading="lazy"
+                     alt="{{ review.place_name }}的評論圖片 {{ loop.index }}">
+              </button>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+
+      <nav class="d-flex justify-content-between align-items-center mt-4" aria-label="評論分頁">
+        {% if previous_href %}<a class="btn btn-outline-secondary" href="{{ previous_href }}">上一頁</a>{% else %}<span></span>{% endif %}
+        <span class="small text-body-secondary">第 {{ page }}／{{ total_pages }} 頁</span>
+        {% if next_href %}<a class="btn btn-outline-secondary" href="{{ next_href }}">下一頁</a>{% else %}<span></span>{% endif %}
+      </nav>
+      {% else %}
+      <div class="empty-state border rounded-3 text-center p-5">
+        <h3 class="h5">沒有符合條件的評論</h3>
+        <p class="text-body-secondary mb-0">請調整搜尋或篩選條件。</p>
+      </div>
+      {% endif %}
+    </section>
+  </main>
+
+  <div class="modal fade" id="imageModal" tabindex="-1" aria-labelledby="imageModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 class="modal-title fs-5" id="imageModalLabel">評論圖片</h2>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="關閉"></button>
+        </div>
+        <div class="modal-body text-center">
+          <img id="modalImage" class="modal-image" alt="放大的評論圖片">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"
+          crossorigin="anonymous"></script>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

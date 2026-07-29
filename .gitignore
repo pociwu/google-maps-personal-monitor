@@ -1,0 +1,45 @@
+# Secrets and real monitoring configuration
+.env
+.env.*
+!.env.example
+config/targets.yaml
+
+# Runtime data (database, images, backups, debug output)
+state/
+data/
+backups/
+debug/
+exports/
+
+# Local Codex/agent data
+.agents/
+.codex/
+.test-tmp/
+.runtime/
+.python-installer.exe
+.python-embed.zip
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Temporary and local backup files
+*.part
+*.tmp
+*.bak
+.git.previous/

@@ -1,0 +1,121 @@
+:root {
+  --dashboard-accent: #0f766e;
+  --dashboard-accent-soft: #ccfbf1;
+}
+
+body {
+  min-height: 100vh;
+  background: color-mix(in srgb, var(--bs-body-bg) 94%, var(--dashboard-accent) 6%);
+}
+
+.contributor-strip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(240px, 290px);
+  gap: 1rem;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+}
+
+.contributor-card {
+  color: inherit;
+  scroll-snap-align: start;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+
+.contributor-card:hover,
+.contributor-card:focus-visible {
+  transform: translateY(-2px);
+  box-shadow: var(--bs-box-shadow);
+}
+
+.contributor-card.selected {
+  background: color-mix(in srgb, var(--bs-body-bg) 88%, var(--dashboard-accent) 12%);
+}
+
+.freshness-dot {
+  width: .75rem;
+  height: .75rem;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  margin-top: .2rem;
+}
+
+.freshness-dot.fresh { background: #16a34a; }
+.freshness-dot.warning { background: #d97706; }
+.freshness-dot.critical { background: #dc2626; }
+
+.review-card {
+  border-left: .3rem solid var(--dashboard-accent);
+}
+
+.rating {
+  color: #f59e0b;
+  font-size: 1.15rem;
+  letter-spacing: .03em;
+  white-space: nowrap;
+}
+
+.review-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.75;
+}
+
+.review-images {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: .75rem;
+}
+
+.image-button {
+  padding: 0;
+  border: 0;
+  border-radius: .6rem;
+  overflow: hidden;
+  background: var(--bs-secondary-bg);
+  aspect-ratio: 1;
+}
+
+.image-button:focus-visible {
+  outline: .2rem solid var(--dashboard-accent);
+  outline-offset: .15rem;
+}
+
+.image-button img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.modal-image {
+  display: block;
+  max-width: 100%;
+  max-height: 80vh;
+  margin: auto;
+  object-fit: contain;
+}
+
+.gap-x-3 { column-gap: 1rem; }
+.gap-y-1 { row-gap: .25rem; }
+
+.simple-message {
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  text-align: center;
+  font-family: system-ui, sans-serif;
+}
+
+@media (min-width: 992px) {
+  .contributor-strip {
+    grid-auto-columns: minmax(250px, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition: none !important;
+  }
+}

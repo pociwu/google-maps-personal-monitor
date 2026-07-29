@@ -1,0 +1,13 @@
+timezone: Asia/Taipei
+locale: zh-TW
+observation_hours: 24
+profile_delay_seconds: [20, 60]
+telegram_delay_seconds: [6, 10]
+delete_after_missing_runs: 3
+max_profile_minutes: 45
+disk_min_free_gb: 10
+disk_min_free_percent: 15
+targets:
+  - name: 範例使用者
+    url: "https://www.google.com/maps/contrib/000000000000000000000/reviews"
+    enabled: false

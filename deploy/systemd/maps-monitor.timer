@@ -1,0 +1,13 @@
+[Unit]
+Description=Run Google Maps monitor every 6 to 8 hours
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=6h
+RandomizedDelaySec=2h
+AccuracySec=1min
+Persistent=true
+Unit=maps-monitor.service
+
+[Install]
+WantedBy=timers.target

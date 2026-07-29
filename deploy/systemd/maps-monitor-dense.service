@@ -1,0 +1,13 @@
+[Unit]
+Description=Google Maps dense date transition monitor
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=maps-monitor-failure.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/maps-monitor
+ExecStart=/usr/bin/docker compose run --rm monitor dense-run-and-send
+TimeoutStartSec=2h
+Nice=10

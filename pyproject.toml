@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "google-maps-contributor-monitor"
+version = "0.2.0"
+description = "Read-only Google Maps public contributor review monitor"
+requires-python = ">=3.12"
+dependencies = [
+  "httpx==0.28.1",
+  "fastapi==0.116.1",
+  "Jinja2==3.1.6",
+  "Pillow==11.3.0",
+  "playwright==1.61.0",
+  "PyYAML==6.0.2",
+  "tzdata==2025.2",
+  "uvicorn==0.35.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest==8.4.1", "ruff==0.12.5"]
+
+[project.scripts]
+maps-monitor = "maps_monitor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+maps_monitor = ["templates/*.html", "static/*.css", "static/*.js", "static/*.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "B"]
+ignore = ["E501"]
