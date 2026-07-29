@@ -175,6 +175,31 @@ https://github.com/pociwu/google-maps-personal-monitor
 
 公開 Git 歷史永遠排除 `.env`、真實 `config/targets.yaml`、`state/`、SQLite、圖片、備份、Telegram Token 與真實貢獻者網址。GitHub Actions 執行 Python 測試、Ruff、ShellCheck、Gitleaks 與 ARM64 Docker build。
 
+### 將既有手動安裝轉為 Git 管理
+
+如果 `/opt/maps-monitor` 是先前以 ZIP 或手動複製安裝、目錄內沒有 `.git`，首次升級請執行：
+
+```bash
+sudo systemctl stop maps-monitor.timer maps-monitor-web.service
+cd /opt
+stamp="$(date +%Y%m%d-%H%M%S)"
+sudo mv maps-monitor "maps-monitor.pre-git-${stamp}"
+sudo git clone --branch v0.2.0 --depth 1 \
+  https://github.com/pociwu/google-maps-personal-monitor.git maps-monitor
+sudo cp "maps-monitor.pre-git-${stamp}/.env" maps-monitor/.env
+sudo cp "maps-monitor.pre-git-${stamp}/config/targets.yaml" \
+  maps-monitor/config/targets.yaml
+sudo mv "maps-monitor.pre-git-${stamp}/state" maps-monitor/state
+cd maps-monitor
+sudo docker compose build
+sudo docker compose run --rm monitor build-thumbnails
+sudo ./deploy/install.sh
+curl --fail http://127.0.0.1:8000/healthz
+```
+
+確認評論、圖片、Telegram 與網頁都正常後，才自行移除
+`/opt/maps-monitor.pre-git-*`；它是首次轉換時保留的完整回復副本。
+
 Ubuntu 只部署版本標籤，不直接跟隨 `main`：
 
 ```bash
