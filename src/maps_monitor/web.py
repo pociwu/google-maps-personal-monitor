@@ -20,7 +20,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 DATABASE_PATH = Path(
-    os.getenv("MAPS_MONITOR_DATABASE", "/app/state/data/monitor.sqlite3")
+    os.getenv("MAPS_MONITOR_DATABASE", "/app/state/web/monitor.sqlite3")
 ).resolve()
 IMAGE_ROOT = Path(
     os.getenv("MAPS_MONITOR_IMAGE_DIR", "/app/state/data/images")
@@ -284,6 +284,8 @@ def create_app() -> FastAPI:
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
         )
+        if response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["Cache-Control"] = "no-store"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "style-src 'self' https://cdn.jsdelivr.net; "
@@ -334,7 +336,7 @@ def create_app() -> FastAPI:
     def health():
         try:
             with _read_connection() as connection:
-                connection.execute("SELECT 1").fetchone()
+                connection.execute("SELECT COUNT(*) FROM sqlite_schema").fetchone()
             return JSONResponse({"status": "ok"})
         except sqlite3.Error:
             return JSONResponse({"status": "unavailable"}, status_code=503)

@@ -101,7 +101,7 @@ http://100.x.x.x:8000/
 - 僅評分項目顯示「（沒有文字）」與「僅評分」。
 - 已確認日期直接顯示，估算日期加「約」。
 - 縮圖延遲載入，燈箱才讀取原圖。
-- SQLite、原圖與縮圖皆以唯讀方式掛載。
+- Web 使用原子產生的 SQLite 展示快照；快照、原圖與縮圖皆以唯讀方式掛載。
 - 沒有資料寫入路由、管理介面、下載功能或公開 JSON API。
 - 一般 access log 關閉，不記錄搜尋字串。
 - 所有回應加入 `noindex`、CSP 與其他安全標頭。
@@ -128,7 +128,8 @@ state/backups/pre-schema-v3-*.sqlite3
 ## 資料位置
 
 ```text
-SQLite       state/data/monitor.sqlite3
+監控 SQLite  state/data/monitor.sqlite3
+Web 快照     state/web/monitor.sqlite3
 原圖         state/data/images/<前兩碼>/<SHA-256>.<格式>
 縮圖         state/data/images/thumbnails/<前兩碼>/<SHA-256>.webp
 除錯資料     state/debug/
@@ -184,7 +185,7 @@ sudo systemctl stop maps-monitor.timer maps-monitor-web.service
 cd /opt
 stamp="$(date +%Y%m%d-%H%M%S)"
 sudo mv maps-monitor "maps-monitor.pre-git-${stamp}"
-sudo git clone --branch v0.2.0 --depth 1 \
+sudo git clone --branch v0.2.1 --depth 1 \
   https://github.com/pociwu/google-maps-personal-monitor.git maps-monitor
 sudo cp "maps-monitor.pre-git-${stamp}/.env" maps-monitor/.env
 sudo cp "maps-monitor.pre-git-${stamp}/config/targets.yaml" \
@@ -204,10 +205,19 @@ Ubuntu 只部署版本標籤，不直接跟隨 `main`：
 
 ```bash
 cd /opt/maps-monitor
-sudo ./deploy/update.sh v0.2.0
+sudo ./deploy/update.sh v0.2.1
 ```
 
 更新程式會先備份、取得指定標籤、重建映像、補建縮圖並執行 Web 健康檢查；失敗時回到部署前的程式版本。
+
+Web 不直接開啟 WAL 模式的監控資料庫。每次監控或資料操作結束時，程式會透過
+SQLite Backup API 原子更新 `state/web/monitor.sqlite3`；巡查期間網站持續顯示上一份
+完整快照。需要手動重建時可執行：
+
+```bash
+sudo docker compose run --rm monitor refresh-dashboard
+sudo docker compose up -d --force-recreate web
+```
 
 ## 開發驗證
 

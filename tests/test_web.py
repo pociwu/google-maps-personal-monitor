@@ -138,3 +138,9 @@ def test_health_and_safe_unavailable_page(tmp_path, monkeypatch):
     assert response.status_code == 503
     assert "資料暫時無法使用" in response.text
     assert str(tmp_path) not in response.text
+
+    corrupt = tmp_path / "corrupt.sqlite3"
+    corrupt.write_text("not a sqlite database", encoding="utf-8")
+    corrupt_client = _client(monkeypatch, corrupt, image_root)
+    assert corrupt_client.get("/healthz").status_code == 503
+    assert corrupt_client.get("/").headers["cache-control"] == "no-store"

@@ -28,6 +28,8 @@ install -m 0644 deploy/systemd/maps-monitor-web.service /etc/systemd/system/
 install -m 0755 -o "$deploy_user" -g "$deploy_group" \
   deploy/maps-monitor-menu.sh "$deploy_home/maps-monitor-menu.sh"
 chmod 0600 /opt/maps-monitor/.env
+cd /opt/maps-monitor
+docker compose run --rm monitor refresh-dashboard
 systemctl daemon-reload
 systemctl enable --now maps-monitor.timer maps-monitor-dense.timer maps-monitor-backup.timer
 systemctl enable --now maps-monitor-web.service

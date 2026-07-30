@@ -13,7 +13,7 @@ from .config import Settings, load_settings
 from .database import Database
 from .engine import MonitorEngine
 from .images import ImageArchive
-from .operations import backup, export_reviews
+from .operations import backup, export_reviews, refresh_dashboard_snapshot
 from .telegram import TelegramSender
 
 
@@ -23,6 +23,17 @@ def _sender(settings: Settings, db: Database) -> TelegramSender:
     return TelegramSender(
         db, settings.telegram_token, settings.telegram_chat_id, settings.telegram_delay_seconds
     )
+
+
+def configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    # httpx INFO messages contain the complete request URL. Telegram embeds
+    # the bot token in that URL, so these request logs must remain disabled.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 @contextmanager
@@ -76,6 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("dense-run-and-send", help="密集日期巡查並傳送通知")
     sub.add_parser("backup", help="建立 SQLite 與圖片硬連結快照")
     sub.add_parser("build-thumbnails", help="補建既有永久圖片的 WebP 縮圖")
+    sub.add_parser("refresh-dashboard", help="重新產生唯讀儀表板資料庫快照")
     test = sub.add_parser("test-telegram", help="傳送 Telegram 測試訊息")
     test.add_argument("--message", default="Google Maps 評論監控測試成功")
     failure = sub.add_parser("notify-system-failure", help="由 systemd 失敗服務呼叫")
@@ -89,13 +101,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    configure_logging()
     args = build_parser().parse_args(argv)
     settings = load_settings(args.config)
     db = Database(settings.database)
+    snapshot = settings.data_dir.parent / "web" / "monitor.sqlite3"
     try:
         if args.command == "run":
             with _process_lock(settings):
@@ -120,6 +130,8 @@ def main(argv: list[str] | None = None) -> int:
             built, failed = archive.build_missing_thumbnails(db)
             print(f"縮圖補建完成：新增 {built}，失敗 {failed}")
             return 1 if failed else 0
+        elif args.command == "refresh-dashboard":
+            pass
         elif args.command == "test-telegram":
             db.create_event("test", {"message": args.message})
             asyncio.run(_sender(settings, db).send_pending())
@@ -143,7 +155,16 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(dict(row), ensure_ascii=False, indent=2))
         return 0
     finally:
-        db.close()
+        active_error = sys.exc_info()[0] is not None
+        try:
+            refresh_dashboard_snapshot(db, snapshot)
+        except Exception:
+            if active_error:
+                logging.exception("儀表板快照更新失敗")
+            else:
+                raise
+        finally:
+            db.close()
 
 
 if __name__ == "__main__":

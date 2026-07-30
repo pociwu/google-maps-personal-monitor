@@ -2,7 +2,7 @@ services:
   monitor:
     build:
       context: .
-    image: maps-contributor-monitor:0.2.0
+    image: maps-contributor-monitor:0.2.1
     platform: linux/arm64
     user: "0:0"
     init: true
@@ -24,7 +24,7 @@ services:
   web:
     build:
       context: .
-    image: maps-contributor-monitor:0.2.0
+    image: maps-contributor-monitor:0.2.1
     platform: linux/arm64
     user: "0:0"
     init: true
@@ -34,10 +34,11 @@ services:
     env_file:
       - .env
     environment:
-      MAPS_MONITOR_DATABASE: /app/state/data/monitor.sqlite3
+      MAPS_MONITOR_DATABASE: /app/state/web/monitor.sqlite3
       MAPS_MONITOR_IMAGE_DIR: /app/state/data/images
     volumes:
-      - ./state:/app/state:ro
+      - ./state/web:/app/state/web:ro
+      - ./state/data/images:/app/state/data/images:ro
     ports:
       - "0.0.0.0:8000:8000"
     security_opt:

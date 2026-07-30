@@ -5,11 +5,35 @@ import json
 import os
 import shutil
 import sqlite3
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import Settings
 from .database import Database
+
+
+def refresh_dashboard_snapshot(db: Database, destination: Path) -> Path:
+    """Atomically publish a clean rollback-journal copy for the web app."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+    target = sqlite3.connect(temporary)
+    try:
+        db.connection.backup(target)
+        target.execute("PRAGMA journal_mode=DELETE")
+        target.commit()
+    except Exception:
+        target.close()
+        temporary.unlink(missing_ok=True)
+        raise
+    else:
+        target.close()
+    try:
+        os.chmod(temporary, 0o640)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
 
 
 def backup(db: Database, settings: Settings) -> Path:
