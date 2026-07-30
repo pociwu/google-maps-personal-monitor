@@ -12,7 +12,7 @@
 - 正常巡查每 6～8 小時；日期切換附近可每 30～60 分鐘密集觀察。
 - 初次匯入靜默保存並傳送摘要；其後 24 小時觀察期不傳送內容事件。
 - Telegram 逐則發送，間隔 6～10 秒，已嘗試事件不重複發送。
-- 原圖永久保存；同一評論依原始檔 SHA-256 與精確像素指紋去除重複圖片引用，另產生 480px WebP 縮圖。
+- 原圖永久保存；同一評論以原始檔、精確像素及嚴格有損重編碼比對去除重複圖片引用，另產生 480px WebP 縮圖。
 - SQLite 保存日期證據、評論狀態與事件；每日建立本機快照。
 - 提供 Tailscale 使用的單頁唯讀 Web 儀表板。
 
@@ -124,16 +124,16 @@ curl http://127.0.0.1:8000/healthz
 舊資料庫由新版第一次開啟前會備份至：
 
 ```text
-state/backups/pre-schema-v5-*.sqlite3
+state/backups/pre-schema-v6-*.sqlite3
 ```
 
 遷移失敗會自動還原。舊推算日期保留為 `legacy_publish_date`。
 
-schema v5 會先備份，再為既有圖片建立「EXIF 方向校正後的尺寸與 RGBA 像素」
-精確指紋；同一評論內原始檔 SHA-256 相同，或解碼後像素完全相同的圖片引用，
-只保留最早成功保存的一筆。這不使用模糊或感知比對，不會合併只有外觀相近的
-不同照片。舊圖片在遷移時全部先視為目前圖片，後續只有在連續兩次完整巡查都
-缺失時才移入歷史圖片。Google 圖片網址數量變動不再誤判為評論修改。
+schema v6 會先備份，再為既有圖片建立精確像素與嚴格感知指紋。同一評論內
+原始檔 SHA-256 相同、解碼後像素完全相同，或同尺寸 JPEG／WebP／AVIF 通過
+差分雜湊及 64px RGB 誤差雙重門檻時，只保留最早成功保存的一筆。PNG 等無損
+格式不套用感知比對。舊圖片後續只有在連續兩次完整巡查都缺失時才移入歷史
+圖片。Google 圖片網址或有損重新編碼版本的變動不再誤判為評論修改。
 
 ## 資料位置
 
@@ -195,7 +195,7 @@ sudo systemctl stop maps-monitor.timer maps-monitor-web.service
 cd /opt
 stamp="$(date +%Y%m%d-%H%M%S)"
 sudo mv maps-monitor "maps-monitor.pre-git-${stamp}"
-sudo git clone --branch v0.3.1 --depth 1 \
+sudo git clone --branch v0.3.2 --depth 1 \
   https://github.com/pociwu/google-maps-personal-monitor.git maps-monitor
 sudo cp "maps-monitor.pre-git-${stamp}/.env" maps-monitor/.env
 sudo cp "maps-monitor.pre-git-${stamp}/config/targets.yaml" \
@@ -215,7 +215,7 @@ Ubuntu 只部署版本標籤，不直接跟隨 `main`：
 
 ```bash
 cd /opt/maps-monitor
-sudo ./deploy/update.sh v0.3.1
+sudo ./deploy/update.sh v0.3.2
 ```
 
 更新程式會先備份、取得指定標籤、重建映像、補建縮圖並執行 Web 健康檢查；失敗時回到部署前的程式版本。

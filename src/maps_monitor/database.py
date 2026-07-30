@@ -12,7 +12,12 @@ from typing import Any, Iterator
 
 from .config import TargetConfig
 from .dates import parse_relative
-from .image_fingerprint import decoded_pixel_sha256
+from .image_fingerprint import (
+    VisualFingerprint,
+    decoded_pixel_sha256,
+    visual_fingerprint,
+    visually_equivalent,
+)
 from .util import iso_now, stable_hash, utc_now
 
 
@@ -98,6 +103,7 @@ CREATE TABLE IF NOT EXISTS images (
     source_url TEXT NOT NULL,
     sha256 TEXT,
     pixel_sha256 TEXT,
+    visual_hash TEXT,
     local_path TEXT,
     thumbnail_path TEXT,
     byte_size INTEGER,
@@ -189,6 +195,7 @@ OBSERVATION_MIGRATION_COLUMNS = {
 
 IMAGE_MIGRATION_COLUMNS = {
     "pixel_sha256": "TEXT",
+    "visual_hash": "TEXT",
     "thumbnail_path": "TEXT",
     "last_seen_at": "TEXT",
     "is_current": "INTEGER NOT NULL DEFAULT 1",
@@ -242,6 +249,7 @@ class Database:
             or (bool(old_image_columns) and "uq_images_review_sha" not in existing_indexes)
             or (bool(old_image_columns) and "pixel_sha256" not in old_image_columns)
             or (bool(old_image_columns) and "uq_images_review_pixels" not in existing_indexes)
+            or (bool(old_image_columns) and "visual_hash" not in old_image_columns)
         )
         migration_backup = self._backup_before_migration() if migration_needed else None
         try:
@@ -259,6 +267,10 @@ class Database:
             scanned, removed = self._deduplicate_image_references()
             fingerprinted, fingerprint_failures = self._backfill_image_pixel_fingerprints()
             pixel_scanned, pixel_removed = self._deduplicate_pixel_references()
+            visual_fingerprinted, visual_failures = (
+                self._backfill_image_visual_fingerprints()
+            )
+            visual_scanned, visual_removed = self._deduplicate_visual_references()
             rehashed = (
                 self._rebuild_review_content_hashes(old_review_columns)
                 if migration_needed else 0
@@ -289,8 +301,8 @@ class Database:
                 )
             self._backfill_observation_parsing()
             self.connection.execute(
-                "INSERT INTO meta(key,value) VALUES('schema_version','5') "
-                "ON CONFLICT(key) DO UPDATE SET value='5'"
+                "INSERT INTO meta(key,value) VALUES('schema_version','6') "
+                "ON CONFLICT(key) DO UPDATE SET value='6'"
             )
             self.connection.commit()
             if migration_needed:
@@ -305,6 +317,13 @@ class Database:
                     fingerprint_failures,
                     pixel_scanned,
                     pixel_removed,
+                )
+                logging.info(
+                    "圖片感知指紋：新增 %d，失敗 %d；掃描 %d，刪除近似重複引用 %d",
+                    visual_fingerprinted,
+                    visual_failures,
+                    visual_scanned,
+                    visual_removed,
                 )
                 logging.info(
                     "評論內容雜湊遷移完成：重建 %d 則，圖片網址數量不再觸發修改",
@@ -401,6 +420,100 @@ class Database:
             )
         return scanned, len(duplicate_ids)
 
+    def _backfill_image_visual_fingerprints(self) -> tuple[int, int]:
+        rows = self.connection.execute(
+            """SELECT id,local_path FROM images
+            WHERE status='saved' AND visual_hash IS NULL AND local_path IS NOT NULL"""
+        ).fetchall()
+        fingerprinted = 0
+        failed = 0
+        for row in rows:
+            try:
+                fingerprint = visual_fingerprint(Path(row["local_path"]))
+            except Exception as exc:
+                logging.warning(
+                    "無法建立圖片感知指紋：image_id=%s path=%s error=%s",
+                    row["id"],
+                    row["local_path"],
+                    exc,
+                )
+                failed += 1
+                continue
+            self.connection.execute(
+                "UPDATE images SET visual_hash=? WHERE id=?",
+                (fingerprint.difference_hash, row["id"]),
+            )
+            fingerprinted += 1
+        return fingerprinted, failed
+
+    def _deduplicate_visual_references(self) -> tuple[int, int]:
+        rows = self.connection.execute(
+            """SELECT id,review_id,local_path,visual_hash FROM images
+            WHERE status='saved' AND visual_hash IS NOT NULL AND local_path IS NOT NULL
+            ORDER BY review_id,id"""
+        ).fetchall()
+        keepers: dict[int, list[tuple[sqlite3.Row, VisualFingerprint]]] = {}
+        duplicate_ids: list[int] = []
+        for row in rows:
+            try:
+                fingerprint = visual_fingerprint(Path(row["local_path"]))
+            except Exception:
+                continue
+            review_keepers = keepers.setdefault(int(row["review_id"]), [])
+            canonical = next(
+                (
+                    keeper
+                    for keeper, keeper_fingerprint in review_keepers
+                    if visually_equivalent(keeper_fingerprint, fingerprint)
+                ),
+                None,
+            )
+            if canonical is None:
+                review_keepers.append((row, fingerprint))
+                continue
+            self._merge_duplicate_image_state(int(canonical["id"]), int(row["id"]))
+            duplicate_ids.append(int(row["id"]))
+        if duplicate_ids:
+            placeholders = ",".join("?" for _ in duplicate_ids)
+            self.connection.execute(
+                f"DELETE FROM images WHERE id IN ({placeholders})",
+                duplicate_ids,
+            )
+        return len(rows), len(duplicate_ids)
+
+    def _merge_duplicate_image_state(self, keeper_id: int, duplicate_id: int) -> None:
+        self.connection.execute(
+            """UPDATE images AS keeper SET
+            first_seen_at=MIN(
+                keeper.first_seen_at,
+                (SELECT first_seen_at FROM images WHERE id=?)
+            ),
+            last_seen_at=MAX(
+                COALESCE(keeper.last_seen_at,keeper.first_seen_at),
+                COALESCE(
+                    (SELECT last_seen_at FROM images WHERE id=?),
+                    (SELECT first_seen_at FROM images WHERE id=?)
+                )
+            ),
+            is_current=MAX(
+                keeper.is_current,
+                COALESCE((SELECT is_current FROM images WHERE id=?),0)
+            ),
+            missing_count=MIN(
+                keeper.missing_count,
+                COALESCE((SELECT missing_count FROM images WHERE id=?),0)
+            )
+            WHERE keeper.id=?""",
+            (
+                duplicate_id,
+                duplicate_id,
+                duplicate_id,
+                duplicate_id,
+                duplicate_id,
+                keeper_id,
+            ),
+        )
+
     def _rebuild_review_content_hashes(self, old_columns: set[str]) -> int:
         required = {"id", "place_name", "place_url", "rating", "body", "content_hash"}
         if not required.issubset(old_columns):
@@ -426,7 +539,7 @@ class Database:
     def _backup_before_migration(self) -> Path:
         backup_dir = self.path.parent.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
-        destination = backup_dir / f"pre-schema-v5-{datetime.now().strftime('%Y%m%d-%H%M%S')}.sqlite3"
+        destination = backup_dir / f"pre-schema-v6-{datetime.now().strftime('%Y%m%d-%H%M%S')}.sqlite3"
         target = sqlite3.connect(destination)
         try:
             self.connection.backup(target)

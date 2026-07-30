@@ -11,7 +11,11 @@ import httpx
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .database import Database
-from .image_fingerprint import decoded_pixel_sha256
+from .image_fingerprint import (
+    decoded_pixel_sha256,
+    visual_fingerprint,
+    visually_equivalent,
+)
 from .util import iso_now
 
 
@@ -171,14 +175,34 @@ class ImageArchive:
                         temporary.write_bytes(content)
                         os.replace(temporary, destination)
                     pixel_digest = decoded_pixel_sha256(destination)
+                    candidate_fingerprint = visual_fingerprint(destination)
                     thumbnail = self.create_thumbnail(destination, digest)
                     canonical = db.connection.execute(
-                        """SELECT id,sha256,local_path FROM images
+                        """SELECT id,sha256,local_path,visual_hash FROM images
                         WHERE review_id=? AND status='saved' AND id<>?
                           AND (sha256=? OR pixel_sha256=?)
                         ORDER BY id LIMIT 1""",
                         (review_id, image_id, digest, pixel_digest),
                     ).fetchone()
+                    if canonical is None:
+                        candidates = db.connection.execute(
+                            """SELECT id,sha256,local_path,visual_hash FROM images
+                            WHERE review_id=? AND status='saved' AND id<>?
+                              AND visual_hash IS NOT NULL AND local_path IS NOT NULL
+                            ORDER BY id""",
+                            (review_id, image_id),
+                        ).fetchall()
+                        for possible in candidates:
+                            possible_path = Path(possible["local_path"])
+                            if not possible_path.exists():
+                                continue
+                            possible_fingerprint = visual_fingerprint(possible_path)
+                            if visually_equivalent(
+                                possible_fingerprint,
+                                candidate_fingerprint,
+                            ):
+                                canonical = possible
+                                break
                     if canonical:
                         db.connection.execute(
                             "UPDATE images SET last_seen_at=?,error=NULL WHERE id=?",
@@ -189,12 +213,13 @@ class ImageArchive:
                         saved_path = str(canonical["local_path"] or destination)
                     else:
                         db.connection.execute(
-                            """UPDATE images SET sha256=?,pixel_sha256=?,local_path=?,
-                            thumbnail_path=?,byte_size=?,status='saved',error=NULL,last_seen_at=?
-                            WHERE id=?""",
+                            """UPDATE images SET sha256=?,pixel_sha256=?,visual_hash=?,
+                            local_path=?,thumbnail_path=?,byte_size=?,status='saved',
+                            error=NULL,last_seen_at=? WHERE id=?""",
                             (
                                 digest,
                                 pixel_digest,
+                                candidate_fingerprint.difference_hash,
                                 str(destination),
                                 str(thumbnail),
                                 len(content),

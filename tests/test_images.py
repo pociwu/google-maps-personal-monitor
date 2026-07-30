@@ -61,6 +61,28 @@ def _png_bytes(color: str = "red", metadata: str | None = None) -> bytes:
     return output.getvalue()
 
 
+def _jpeg_bytes(quality: int, changed: bool = False) -> bytes:
+    image = Image.new("RGB", (256, 256))
+    image.putdata(
+        [
+            (
+                (x * 7 + y * 3) % 256,
+                (x * 5 + y * 11) % 256,
+                (x * 13 + y * 2) % 256,
+            )
+            for y in range(256)
+            for x in range(256)
+        ]
+    )
+    if changed:
+        for y in range(80, 176):
+            for x in range(80, 176):
+                image.putpixel((x, y), (20, 240, 40))
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=quality)
+    return output.getvalue()
+
+
 def _review(database: Database, key: str = "r1") -> int:
     now = "2026-07-30T00:00:00+00:00"
     target = database.connection.execute(
@@ -246,4 +268,76 @@ def test_archive_keeps_images_when_even_one_pixel_differs(tmp_path: Path, monkey
     assert result.current_count == 2
     assert len(rows) == 2
     assert len({row["pixel_sha256"] for row in rows}) == 2
+    database.close()
+
+
+def test_archive_deduplicates_google_style_jpeg_recompression(
+    tmp_path: Path, monkeypatch
+):
+    variants = {
+        "/image-a": _jpeg_bytes(95),
+        "/image-b": _jpeg_bytes(90),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=variants[request.url.path],
+            headers={"content-type": "image/jpeg"},
+        )
+
+    real_client = httpx.AsyncClient
+
+    def client_factory(*_args, **_kwargs):
+        return real_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(images_module.httpx, "AsyncClient", client_factory)
+    database = Database(tmp_path / "data" / "monitor.sqlite3")
+    review_id = _review(database)
+    archive = ImageArchive(tmp_path / "data" / "images", 0, 0)
+
+    result = asyncio.run(
+        archive.archive(
+            database,
+            review_id,
+            ("https://example.test/image-a", "https://example.test/image-b"),
+        )
+    )
+
+    assert result.current_count == 1
+    database.close()
+
+
+def test_archive_keeps_visually_similar_but_different_jpegs(tmp_path: Path, monkeypatch):
+    variants = {
+        "/image-a": _jpeg_bytes(95),
+        "/image-b": _jpeg_bytes(90, changed=True),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=variants[request.url.path],
+            headers={"content-type": "image/jpeg"},
+        )
+
+    real_client = httpx.AsyncClient
+
+    def client_factory(*_args, **_kwargs):
+        return real_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(images_module.httpx, "AsyncClient", client_factory)
+    database = Database(tmp_path / "data" / "monitor.sqlite3")
+    review_id = _review(database)
+    archive = ImageArchive(tmp_path / "data" / "images", 0, 0)
+
+    result = asyncio.run(
+        archive.archive(
+            database,
+            review_id,
+            ("https://example.test/image-a", "https://example.test/image-b"),
+        )
+    )
+
+    assert result.current_count == 2
     database.close()

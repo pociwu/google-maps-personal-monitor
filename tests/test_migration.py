@@ -29,7 +29,7 @@ def test_old_database_is_backed_up_and_migrated(tmp_path):
     assert "publish_estimate" in columns
     row = db.connection.execute("SELECT legacy_publish_date FROM reviews WHERE id=1").fetchone()
     assert row[0] == "2026-07-09"
-    assert list((tmp_path / "backups").glob("pre-schema-v5-*.sqlite3"))
+    assert list((tmp_path / "backups").glob("pre-schema-v6-*.sqlite3"))
     db.close()
 
 
@@ -104,11 +104,11 @@ def test_schema_v4_backs_up_and_removes_duplicate_image_references(tmp_path):
     assert rows[0]["missing_count"] == 0
     assert rows[0]["last_seen_at"] == now
     assert "review_url" in review_columns
-    assert schema_version == "5"
+    assert schema_version == "6"
     assert migrated_hash == stable_hash(
         {"place_name": "店家", "place_url": None, "rating": None, "text": "內容"}
     )
-    assert list((tmp_path / "backups").glob("pre-schema-v5-*.sqlite3"))
+    assert list((tmp_path / "backups").glob("pre-schema-v6-*.sqlite3"))
 
 
 def test_schema_v5_removes_byte_distinct_images_with_identical_pixels(tmp_path):
@@ -172,4 +172,79 @@ def test_schema_v5_removes_byte_distinct_images_with_identical_pixels(tmp_path):
     assert len(rows) == 1
     assert rows[0]["pixel_sha256"]
     assert "uq_images_review_pixels" in indexes
-    assert list((tmp_path / "backups").glob("pre-schema-v5-*.sqlite3"))
+    assert list((tmp_path / "backups").glob("pre-schema-v6-*.sqlite3"))
+
+
+def test_schema_v6_removes_recompressed_jpeg_duplicates(tmp_path):
+    data = tmp_path / "data"
+    image_dir = data / "images"
+    image_dir.mkdir(parents=True)
+    image = Image.new("RGB", (256, 256))
+    image.putdata(
+        [
+            (
+                (x * 7 + y * 3) % 256,
+                (x * 5 + y * 11) % 256,
+                (x * 13 + y * 2) % 256,
+            )
+            for y in range(256)
+            for x in range(256)
+        ]
+    )
+    image_paths = []
+    for index, quality in enumerate((95, 90), start=1):
+        image_path = image_dir / f"{index}.jpg"
+        image.save(image_path, format="JPEG", quality=quality)
+        image_paths.append(image_path)
+
+    path = data / "monitor.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE images (
+            id INTEGER PRIMARY KEY,review_id INTEGER,source_url TEXT,sha256 TEXT,
+            pixel_sha256 TEXT,local_path TEXT,thumbnail_path TEXT,byte_size INTEGER,
+            status TEXT,error TEXT,first_seen_at TEXT,last_seen_at TEXT,
+            is_current INTEGER DEFAULT 1,missing_count INTEGER DEFAULT 0,
+            UNIQUE(review_id,source_url)
+        );
+        CREATE UNIQUE INDEX uq_images_review_sha ON images(review_id,sha256)
+            WHERE status='saved' AND sha256 IS NOT NULL;
+        CREATE UNIQUE INDEX uq_images_review_pixels ON images(review_id,pixel_sha256)
+            WHERE status='saved' AND pixel_sha256 IS NOT NULL;
+        CREATE TABLE meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);
+        INSERT INTO meta(key,value) VALUES('schema_version','5');
+        """
+    )
+    now = "2026-07-30T00:00:00+00:00"
+    for image_id, image_path in enumerate(image_paths, start=1):
+        connection.execute(
+            """INSERT INTO images
+            (id,review_id,source_url,sha256,pixel_sha256,local_path,status,
+             first_seen_at,last_seen_at)
+            VALUES(?,?,?,?,?,?,'saved',?,?)""",
+            (
+                image_id,
+                1,
+                f"https://example.test/{image_id}",
+                f"{image_id}" * 64,
+                f"{image_id + 2}" * 64,
+                str(image_path),
+                now,
+                now,
+            ),
+        )
+    connection.commit()
+    connection.close()
+
+    database = Database(path)
+    rows = database.connection.execute(
+        "SELECT id,visual_hash FROM images WHERE status='saved' ORDER BY id"
+    ).fetchall()
+    schema_version = database.get_meta("schema_version")
+    database.close()
+
+    assert len(rows) == 1
+    assert rows[0]["visual_hash"]
+    assert schema_version == "6"
+    assert list((tmp_path / "backups").glob("pre-schema-v6-*.sqlite3"))
