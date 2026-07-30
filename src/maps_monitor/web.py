@@ -377,7 +377,11 @@ def _evidence_data(review_id: int) -> dict | None:
                 observation["parsed_unit"], observation["parsed_unit"]
             )
             observation["parsed_text"] = f"{observation['parsed_count']} {unit}"
-    return {"review": review, "observations": observations}
+    return {
+        "app_version": APP_VERSION,
+        "review": review,
+        "observations": observations,
+    }
 
 
 def _render(name: str, context: dict, status_code: int = 200) -> HTMLResponse:
@@ -459,7 +463,7 @@ def create_app() -> FastAPI:
             return _render("evidence_unavailable.html", {}, status_code=503)
         if not data:
             raise HTTPException(status_code=404)
-        return _render("evidence.html", data)
+        return _render("evidence_page.html", data)
 
     @application.get("/healthz")
     def health():

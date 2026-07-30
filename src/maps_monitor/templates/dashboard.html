@@ -142,12 +142,8 @@
             {% if review.status == 'deleted' and review.review_url %}
             <p class="small text-warning-emphasis mt-2 mb-0">Google 原頁可能已不存在。</p>
             {% endif %}
-            <details class="date-evidence mt-3" data-evidence-url="{{ review.evidence_url }}">
-              <summary>查看日期推算證據</summary>
-              <div class="evidence-content mt-2" data-evidence-content>
-                <p class="small text-body-secondary mb-0">展開後載入完整證據。</p>
-              </div>
-            </details>
+            <a class="btn btn-outline-secondary btn-sm mt-3"
+               href="{{ review.evidence_url }}">查看日期推算證據</a>
             {% if review.images %}
             <div class="review-images mt-3">
               {% for image in review.images %}

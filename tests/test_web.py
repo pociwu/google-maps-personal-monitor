@@ -155,6 +155,21 @@ def test_dashboard_filters_and_noindex(tmp_path, monkeypatch):
     assert client.get("/reviews/999/evidence").status_code == 404
 
 
+def test_evidence_is_a_standalone_page_without_javascript(tmp_path, monkeypatch):
+    database_path, image_root, _digest = _seed(tmp_path)
+    client = _client(monkeypatch, database_path, image_root)
+
+    dashboard = client.get("/")
+    assert 'href="/reviews/1/evidence"' in dashboard.text
+
+    evidence = client.get("/reviews/1/evidence")
+    assert evidence.status_code == 200
+    assert "<html" in evidence.text
+    assert 'name="viewport"' in evidence.text
+    assert "觀察紀錄" in evidence.text
+    assert "返回評論首頁" in evidence.text
+
+
 def test_media_is_database_addressed_and_path_safe(tmp_path, monkeypatch):
     database_path, image_root, digest = _seed(tmp_path)
     client = _client(monkeypatch, database_path, image_root)

@@ -101,7 +101,7 @@ http://100.x.x.x:8000/
 - 僅評分項目顯示「（沒有文字）」與「僅評分」。
 - 已確認日期直接顯示，估算日期加「約」。
 - 星等旁顯示 Google 最近一次提供的相對時間。
-- 每則評論可按需載入完整日期推算證據，所有時間統一為 Asia/Taipei。
+- 每則評論可直接開啟響應式日期推算證據頁，不依賴 JavaScript，所有時間統一為 Asia/Taipei。
 - 優先連到 Google 單則評論；無法取得時明確降級為店家連結，舊資料再降級為 Google Maps 店家搜尋。
 - 縮圖延遲載入，燈箱才讀取原圖。
 - 目前圖片直接顯示；連續兩輪確認移除的永久原圖收進「歷史圖片」。
@@ -195,7 +195,7 @@ sudo systemctl stop maps-monitor.timer maps-monitor-web.service
 cd /opt
 stamp="$(date +%Y%m%d-%H%M%S)"
 sudo mv maps-monitor "maps-monitor.pre-git-${stamp}"
-sudo git clone --branch v0.3.4 --depth 1 \
+sudo git clone --branch v0.3.5 --depth 1 \
   https://github.com/pociwu/google-maps-personal-monitor.git maps-monitor
 sudo cp "maps-monitor.pre-git-${stamp}/.env" maps-monitor/.env
 sudo cp "maps-monitor.pre-git-${stamp}/config/targets.yaml" \
@@ -215,7 +215,7 @@ Ubuntu 只部署版本標籤，不直接跟隨 `main`：
 
 ```bash
 cd /opt/maps-monitor
-sudo ./deploy/update.sh v0.3.4
+sudo ./deploy/update.sh v0.3.5
 ```
 
 更新程式會先備份、取得指定標籤、重建映像、補建縮圖並執行 Web 健康檢查；失敗時回到部署前的程式版本。

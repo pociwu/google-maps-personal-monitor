@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-Hant" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>日期推算證據 · Google Maps 個人評論監控</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB"
+        crossorigin="anonymous">
+  <link rel="stylesheet" href="/static/dashboard.css">
+  <script src="/static/theme.js"></script>
+</head>
+<body>
+  <header class="border-bottom bg-body sticky-top">
+    <div class="container py-3">
+      <h1 class="h4 mb-1">日期推算證據</h1>
+      <p class="text-body-secondary mb-0 small">
+        Google Maps 個人評論監控 · 版本 v{{ app_version }}
+      </p>
+    </div>
+  </header>
+
+  <main class="container py-4">
+    <a class="btn btn-outline-secondary btn-sm mb-3" href="/">返回評論首頁</a>
+    {% include "evidence.html" %}
+  </main>
+</body>
+</html>
