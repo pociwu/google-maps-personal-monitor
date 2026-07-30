@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "google-maps-contributor-monitor"
-version = "0.3.3"
+version = "0.3.4"
 description = "Read-only Google Maps public contributor review monitor"
 requires-python = ">=3.12"
 dependencies = [

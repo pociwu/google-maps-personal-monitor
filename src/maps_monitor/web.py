@@ -6,6 +6,7 @@ import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Iterator
 from urllib.parse import urlencode
@@ -20,6 +21,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .dates import normalize_relative_label
 
+
+try:
+    APP_VERSION = version("google-maps-contributor-monitor")
+except PackageNotFoundError:
+    APP_VERSION = "dev"
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 DATABASE_PATH = Path(
@@ -276,6 +282,7 @@ def _dashboard_data(request: Request) -> dict:
             review["link_label"] = "在 Google Maps 搜尋店家"
 
     return {
+        "app_version": APP_VERSION,
         "contributors": contributors,
         "selected_contributor": contributor,
         "reviews": reviews,

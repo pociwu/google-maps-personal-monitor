@@ -1,4 +1,5 @@
 import importlib
+import re
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -130,6 +131,7 @@ def test_dashboard_filters_and_noindex(tmp_path, monkeypatch):
     assert 'rel="noopener noreferrer"' in response.text
     assert "查看日期推算證據" in response.text
     assert "歷史圖片（1）" in response.text
+    assert re.search(r"版本 v(?:\d+\.\d+\.\d+|dev)", response.text)
     assert "2026-07-30 09:23:45" not in response.text
     assert response.headers["x-robots-tag"] == "noindex, nofollow"
     assert "google-analytics" not in response.text.lower()
