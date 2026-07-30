@@ -8,5 +8,5 @@
 - [ ] `ruff check src tests`
 - [ ] `shellcheck deploy/*.sh`
 - [ ] 未提交 `.env`、真實 `config/targets.yaml`、`state/`、SQLite、圖片或 Token
-- [ ] 零點擊 Google Maps 規則未退步
+- [ ] Google Maps 互動仍只限評論全文展開白名單
 - [ ] 文件與部署說明已更新

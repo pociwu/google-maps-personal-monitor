@@ -22,6 +22,22 @@ EXTRACT_SCRIPT = r"""
     const node = card.querySelector(selector);
     return node ? (node.textContent || '').trim() : '';
   };
+  const expandLabels = /^(更多|顯示更多|閱讀更多|more|show more|read more)$/i;
+  const interactionLabels = /(按讚|有幫助|回覆|回應|分享|like|helpful|reply|respond|share)/i;
+  const hasReviewExpander = (card) => {
+    const textNode = card.querySelector('.wiI7pd, .MyEned, [data-review-text]');
+    if (!textNode || !textNode.parentElement) return false;
+    return Array.from(textNode.parentElement.querySelectorAll('button, [role="button"]')).some((node) => {
+      if (node.parentElement !== textNode.parentElement && !textNode.contains(node)) return false;
+      const labels = [
+        node.textContent,
+        node.getAttribute('aria-label'),
+        node.getAttribute('title'),
+      ].filter(Boolean).map((value) => value.trim());
+      return labels.some((label) => expandLabels.test(label)) &&
+        labels.every((label) => !interactionLabels.test(label));
+    });
+  };
   const urlFromStyle = (value) => {
     const match = (value || '').match(/url\(["']?(.*?)["']?\)/);
     return match ? match[1] : null;
@@ -53,12 +69,51 @@ EXTRACT_SCRIPT = r"""
       place_url: placeLink ? placeLink.href : null,
       rating_label: ratingNode ? ratingNode.getAttribute('aria-label') : '',
       text: textOf(card, '.wiI7pd, .MyEned, [data-review-text]'),
+      text_truncated: hasReviewExpander(card),
       relative_time: textOf(card, '.rsqaWe, .xRkPPb, .DU9Pgb'),
       exact_timestamp: exactNode ?
         (exactNode.getAttribute('datetime') || exactNode.getAttribute('data-review-timestamp') || exactNode.getAttribute('data-publish-time')) : null,
       image_urls: [...new Set(imageUrls)],
     };
   }).filter((item) => item.google_review_id || item.place_url || item.text || item.rating_label);
+}
+"""
+
+
+EXPAND_REVIEW_TEXT_SCRIPT = r"""
+() => {
+  const selectors = ['[data-review-id]', 'div.jftiEf', 'div.jJc9Ad'];
+  const raw = Array.from(document.querySelectorAll(selectors.join(',')));
+  const cards = raw.filter((node, index) =>
+    !raw.some((other, j) => j !== index && other.contains(node))
+  );
+  const expandLabels = /^(更多|顯示更多|閱讀更多|more|show more|read more)$/i;
+  const interactionLabels = /(按讚|有幫助|回覆|回應|分享|like|helpful|reply|respond|share)/i;
+  let clicked = 0;
+  for (const card of cards) {
+    const textNode = card.querySelector('.wiI7pd, .MyEned, [data-review-text]');
+    if (!textNode || !textNode.parentElement) continue;
+    const controls = textNode.parentElement.querySelectorAll('button, [role="button"]');
+    for (const control of controls) {
+      if (
+        control.parentElement !== textNode.parentElement &&
+        !textNode.contains(control)
+      ) continue;
+      const labels = [
+        control.textContent,
+        control.getAttribute('aria-label'),
+        control.getAttribute('title'),
+      ].filter(Boolean).map((value) => value.trim());
+      if (
+        !labels.some((label) => expandLabels.test(label)) ||
+        labels.some((label) => interactionLabels.test(label))
+      ) continue;
+      control.click();
+      clicked += 1;
+      break;
+    }
+  }
+  return clicked;
 }
 """
 
@@ -154,8 +209,18 @@ def _normalize_timestamp(value: str | None) -> str | None:
         return None
 
 
+_TRUNCATED_TEXT = re.compile(
+    r"(?:\.{3}|…)\s*(?:更多|顯示更多|閱讀更多|more|show more|read more)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _looks_truncated_text(value: str | None) -> bool:
+    return bool(value and _TRUNCATED_TEXT.search(value.strip()))
+
+
 class ReadOnlyCrawler:
-    """Anonymous crawler that never sends pointer, touch, keyboard, or form input."""
+    """Anonymous crawler that only activates whitelisted review-text expanders."""
 
     def __init__(self, locale: str, timezone: str, timeout_minutes: int, debug_dir: Path):
         self.locale = locale
@@ -199,6 +264,9 @@ class ReadOnlyCrawler:
             reached_end = False
             collected: dict[str, dict] = {}
             while time.monotonic() - started < self.timeout_seconds:
+                expanded = int(await page.evaluate(EXPAND_REVIEW_TEXT_SCRIPT))
+                if expanded:
+                    await page.wait_for_timeout(150)
                 items = await page.evaluate(EXTRACT_SCRIPT)
                 for item in items:
                     collected[_raw_item_key(item)] = item
@@ -215,12 +283,24 @@ class ReadOnlyCrawler:
                     reached_end = True
                     break
                 await page.wait_for_timeout(1500)
+            expanded = int(await page.evaluate(EXPAND_REVIEW_TEXT_SCRIPT))
+            if expanded:
+                await page.wait_for_timeout(150)
             final_items = await page.evaluate(EXTRACT_SCRIPT)
             for item in final_items:
                 collected[_raw_item_key(item)] = item
             raw_items = list(collected.values())
             if not reached_end:
                 raise TimeoutError(f"{name} 未在限制時間內完整捲動到底")
+            truncated = [
+                item
+                for item in raw_items
+                if item.get("text_truncated") or _looks_truncated_text(item.get("text"))
+            ]
+            if truncated:
+                raise RuntimeError(
+                    f"{name} 有 {len(truncated)} 則評論仍是摘要，拒絕以截斷內容更新"
+                )
             reviews: list[ScrapedReview] = []
             seen: set[str] = set()
             contributor_id = urlsplit(url).path.rstrip("/").split("/")[-2]

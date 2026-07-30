@@ -82,6 +82,43 @@ def test_lifecycle_baseline_modify_delete_restore(tmp_path):
     db.close()
 
 
+def test_expanding_legacy_summary_to_full_text_is_silent(tmp_path):
+    cfg = settings(tmp_path)
+    db = Database(cfg.database)
+    engine = MonitorEngine(cfg, db)
+    target = db.sync_targets(cfg.targets, 0)[0]
+
+    asyncio.run(
+        engine.process_success(
+            target,
+            CrawlResult([review("好好吃，服務親切…更多")], True, 1),
+        )
+    )
+    target = db.connection.execute(
+        "SELECT * FROM targets WHERE id=?",
+        (target["id"],),
+    ).fetchone()
+    asyncio.run(
+        engine.process_success(
+            target,
+            CrawlResult(
+                [review("好好吃，服務親切，而且環境乾淨，下次還會再來。")],
+                True,
+                1,
+            ),
+        )
+    )
+
+    row = db.connection.execute("SELECT body,modified_at FROM reviews").fetchone()
+    modified_events = db.connection.execute(
+        "SELECT COUNT(*) FROM events WHERE event_type='modified'"
+    ).fetchone()[0]
+    assert row["body"] == "好好吃，服務親切，而且環境乾淨，下次還會再來。"
+    assert row["modified_at"] is None
+    assert modified_events == 0
+    db.close()
+
+
 def test_dense_success_does_not_increment_missing_count(tmp_path):
     cfg = settings(tmp_path)
     db = Database(cfg.database)

@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from .config import Settings
-from .crawler import ReadOnlyCrawler
+from .crawler import ReadOnlyCrawler, _looks_truncated_text
 from .database import Database
 from .date_service import advance_dense_target, due_dense_target_ids, record_and_assess
 from .dates import parse_relative
@@ -22,6 +22,17 @@ from .util import iso_now, parse_iso, stable_hash, utc_now
 
 
 CONTENT_EVENTS = {"new", "modified", "deleted", "restored", "date_changed"}
+
+
+def _is_full_text_upgrade(existing: sqlite3.Row, scraped: ScrapedReview) -> bool:
+    return bool(
+        _looks_truncated_text(existing["body"])
+        and scraped.text.strip()
+        and not _looks_truncated_text(scraped.text)
+        and existing["place_name"] == scraped.place_name
+        and existing["place_url"] == scraped.place_url
+        and existing["rating"] == scraped.rating
+    )
 
 
 def _event_payload(target: sqlite3.Row, review: ScrapedReview | sqlite3.Row, event_type: str) -> dict:
@@ -221,7 +232,10 @@ class MonitorEngine:
                     edit_date = existing["edit_date"]
                     if existing["status"] == "deleted":
                         event_type = "restored"
-                    elif existing["content_hash"] != new_hash:
+                    elif (
+                        existing["content_hash"] != new_hash
+                        and not _is_full_text_upgrade(existing, scraped)
+                    ):
                         event_type = "modified"
                         old_relative = parse_relative(existing["relative_time"])
                         new_relative = parse_relative(scraped.relative_time)

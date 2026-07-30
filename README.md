@@ -8,7 +8,7 @@
 
 ## 核心特性
 
-- 未登入、無 Cookie、零點擊抓取；不會按讚、愛心、回覆、分享或展開內容。
+- 未登入、無 Cookie；只允許展開評論全文，不會按讚、愛心、回覆或分享。
 - 正常巡查每 6～8 小時；日期切換附近可每 30～60 分鐘密集觀察。
 - 初次匯入靜默保存並傳送摘要；其後 24 小時觀察期不傳送內容事件。
 - Telegram 逐則發送，間隔 6～10 秒，已嘗試事件不重複發送。
@@ -16,11 +16,11 @@
 - SQLite 保存日期證據、評論狀態與事件；每日建立本機快照。
 - 提供 Tailscale 使用的單頁唯讀 Web 儀表板。
 
-## 零點擊保證
+## 唯讀互動保證
 
-抓取器只會開啟公開網址、讀取 DOM 與圖片、直接設定評論容器的捲動位置。它不傳送滑鼠、觸控、鍵盤、表單或 DOM 互動事件。完整資料無法在零點擊條件下取得時，該輪會失敗並保存除錯 HTML／截圖，不會改用點擊方式。
+抓取器只會開啟公開網址、讀取 DOM 與圖片、直接設定評論容器的捲動位置，以及啟動評論文字同一容器內、標籤精確符合「更多／顯示更多／閱讀更多／More／Show more／Read more」的全文展開控制。按讚、有幫助、愛心、回覆、回應、分享等標籤設有拒絕清單；抓取器不傳送滑鼠、觸控、鍵盤或表單輸入，也不登入或載入 Cookie。
 
-`tests/test_read_only.py` 會阻止互動 API 進入抓取器。
+若任何評論仍呈現摘要，該對象整輪巡查失敗並保存除錯 HTML／截圖，不會以截斷內容覆蓋資料。`tests/test_read_only.py` 會阻止全文展開白名單以外的互動 API 進入抓取器。
 
 ## 安裝
 
@@ -195,7 +195,7 @@ sudo systemctl stop maps-monitor.timer maps-monitor-web.service
 cd /opt
 stamp="$(date +%Y%m%d-%H%M%S)"
 sudo mv maps-monitor "maps-monitor.pre-git-${stamp}"
-sudo git clone --branch v0.3.2 --depth 1 \
+sudo git clone --branch v0.3.3 --depth 1 \
   https://github.com/pociwu/google-maps-personal-monitor.git maps-monitor
 sudo cp "maps-monitor.pre-git-${stamp}/.env" maps-monitor/.env
 sudo cp "maps-monitor.pre-git-${stamp}/config/targets.yaml" \
@@ -215,7 +215,7 @@ Ubuntu 只部署版本標籤，不直接跟隨 `main`：
 
 ```bash
 cd /opt/maps-monitor
-sudo ./deploy/update.sh v0.3.2
+sudo ./deploy/update.sh v0.3.3
 ```
 
 更新程式會先備份、取得指定標籤、重建映像、補建縮圖並執行 Web 健康檢查；失敗時回到部署前的程式版本。
