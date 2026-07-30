@@ -26,6 +26,8 @@ previous="$(git rev-parse HEAD)"
 backup_path="$(docker compose run --rm monitor backup)"
 echo "部署前備份：$backup_path"
 
+# Invoked indirectly by the ERR trap below.
+# shellcheck disable=SC2317
 rollback() {
   trap - ERR
   echo "部署失敗，回復前一版本 $previous" >&2

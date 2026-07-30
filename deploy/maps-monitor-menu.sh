@@ -14,6 +14,8 @@ show_reviews() {
   output="$(mktemp)"
   cd "$PROJECT_DIR"
 
+  # The redirect intentionally runs as the calling user; mktemp created this file.
+  # shellcheck disable=SC2024
   if ! sudo docker compose run --rm --entrypoint python monitor - >"$output" <<'PY'
 import sqlite3
 import textwrap
@@ -93,6 +95,8 @@ show_date_evidence() {
   output="$(mktemp)"
   cd "$PROJECT_DIR"
 
+  # The redirect intentionally runs as the calling user; mktemp created this file.
+  # shellcheck disable=SC2024
   if ! sudo docker compose run --rm --entrypoint python monitor - >"$output" <<'PY'
 import sqlite3
 import textwrap
