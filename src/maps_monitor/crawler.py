@@ -8,6 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from playwright.async_api import Browser, Page, async_playwright
 
+from .dates import normalize_relative_label
 from .models import CrawlResult, ScrapedReview
 from .util import stable_hash
 
@@ -29,6 +30,9 @@ EXTRACT_SCRIPT = r"""
     const placeLink = Array.from(card.querySelectorAll('a[href]')).find((a) =>
       /\/maps\/(place|preview)|[?&]cid=|!1s/.test(a.href)
     );
+    const reviewLink = Array.from(card.querySelectorAll('a[href]')).find((a) =>
+      /\/maps\/reviews\/|[?&](review|reviewId|reviewid)=/i.test(a.href)
+    );
     const ratingNode = Array.from(card.querySelectorAll('[role="img"][aria-label]')).find((node) =>
       /星|star/i.test(node.getAttribute('aria-label') || '')
     );
@@ -44,6 +48,7 @@ EXTRACT_SCRIPT = r"""
     }
     return {
       google_review_id: card.getAttribute('data-review-id') || card.dataset.reviewId || null,
+      review_url: reviewLink ? reviewLink.href : null,
       place_name: textOf(card, '.d4r55, .fontHeadlineSmall, .WNxzHc') || (placeLink ? placeLink.textContent.trim() : ''),
       place_url: placeLink ? placeLink.href : null,
       rating_label: ratingNode ? ratingNode.getAttribute('aria-label') : '',
@@ -102,6 +107,17 @@ def _rating(label: str) -> float | None:
 
 def _highest_resolution(url: str) -> str:
     return re.sub(r"=w\d+(?:-h\d+)?(?:-[a-zA-Z0-9-]+)?$", "=s0", url)
+
+
+def _safe_google_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    parts = urlsplit(value)
+    host = (parts.hostname or "").lower()
+    google_host = bool(re.fullmatch(r"(?:[a-z0-9-]+\.)*google\.[a-z.]+", host))
+    if parts.scheme != "https" or not (google_host or host in {"goo.gl", "maps.app.goo.gl"}):
+        return None
+    return value
 
 
 def _raw_item_key(item: dict) -> str:
@@ -209,7 +225,7 @@ class ReadOnlyCrawler:
             seen: set[str] = set()
             contributor_id = urlsplit(url).path.rstrip("/").split("/")[-2]
             for item in raw_items:
-                place_url = item.get("place_url")
+                place_url = _safe_google_url(item.get("place_url"))
                 place_id = _place_id(place_url)
                 review_id = item.get("google_review_id")
                 fallback = place_id or place_url or stable_hash(item)
@@ -221,12 +237,13 @@ class ReadOnlyCrawler:
                     ScrapedReview(
                         review_key=key,
                         google_review_id=review_id,
+                        review_url=_safe_google_url(item.get("review_url")),
                         place_id=place_id,
                         place_name=item.get("place_name") or "未知店家",
                         place_url=place_url,
                         rating=_rating(item.get("rating_label", "")),
                         text=item.get("text", ""),
-                        relative_time=item.get("relative_time", ""),
+                        relative_time=normalize_relative_label(item.get("relative_time", "")),
                         exact_timestamp=_normalize_timestamp(item.get("exact_timestamp")),
                         explicitly_edited=bool(re.search(r"已編輯|已编辑|已更新|edited|updated", item.get("relative_time", ""), re.I)),
                         image_urls=[_highest_resolution(value) for value in item.get("image_urls", [])],

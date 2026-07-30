@@ -26,10 +26,15 @@ CONTENT_EVENTS = {"new", "modified", "deleted", "restored", "date_changed"}
 
 def _event_payload(target: sqlite3.Row, review: ScrapedReview | sqlite3.Row, event_type: str) -> dict:
     if isinstance(review, ScrapedReview):
-        data = review.event_content() | {"review_key": review.review_key, "relative_time": review.relative_time}
+        data = review.event_content() | {
+            "review_key": review.review_key,
+            "review_url": review.review_url,
+            "relative_time": review.relative_time,
+        }
     else:
         data = {
             "review_key": review["review_key"],
+            "review_url": review["review_url"],
             "place_name": review["place_name"],
             "place_url": review["place_url"],
             "rating": review["rating"],
@@ -56,8 +61,8 @@ def _insert_event(
     review_id: int | None,
     payload: dict,
     state: str,
-) -> None:
-    con.execute(
+) -> int:
+    cursor = con.execute(
         """INSERT INTO events
         (event_key,event_type,target_id,review_id,payload_json,delivery_state,created_at)
         VALUES(?,?,?,?,?,?,?)""",
@@ -70,6 +75,21 @@ def _insert_event(
             state,
             iso_now(),
         ),
+    )
+    return int(cursor.lastrowid)
+
+
+def _update_event_payload(
+    con: sqlite3.Connection, event_id: int, additions: dict
+) -> None:
+    row = con.execute("SELECT payload_json FROM events WHERE id=?", (event_id,)).fetchone()
+    if not row:
+        return
+    payload = json.loads(row["payload_json"])
+    payload.update(additions)
+    con.execute(
+        "UPDATE events SET payload_json=? WHERE id=?",
+        (json.dumps(payload, ensure_ascii=False), event_id),
     )
 
 
@@ -151,7 +171,7 @@ class MonitorEngine:
         now_iso = now.isoformat()
         baseline = bool(target["baseline_complete"])
         seen_keys: set[str] = set()
-        review_images: list[tuple[int, list[str]]] = []
+        review_images: list[dict] = []
         with self.db.transaction() as con:
             for scraped in result.reviews:
                 seen_keys.add(scraped.review_key)
@@ -168,22 +188,26 @@ class MonitorEngine:
                         first_seen_window = (previous_time, now)
                     cursor = con.execute(
                         """INSERT INTO reviews
-                        (target_id,review_key,google_review_id,place_id,place_name,place_url,rating,body,
+                        (target_id,review_key,google_review_id,review_url,place_id,place_name,place_url,rating,body,
                          relative_time,photo_count,content_hash,first_seen_at,last_seen_at)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
-                            target["id"], scraped.review_key, scraped.google_review_id, scraped.place_id,
-                            scraped.place_name, scraped.place_url, scraped.rating, scraped.text,
-                            scraped.relative_time, len(scraped.image_urls), new_hash, now_iso, now_iso,
+                            target["id"], scraped.review_key, scraped.google_review_id,
+                            scraped.review_url, scraped.place_id, scraped.place_name,
+                            scraped.place_url, scraped.rating, scraped.text,
+                            scraped.relative_time, 0, new_hash, now_iso, now_iso,
                         ),
                     )
                     review_id = int(cursor.lastrowid)
+                    event_id = None
+                    event_type = "new" if baseline else None
+                    previous_last_seen = None
                     assessment = record_and_assess(
                         con, target, review_id, scraped, new_hash, now, self.settings.timezone,
                         None, first_seen_window, _delivery_state(target, now, "date_changed"),
                     )
                     if baseline:
-                        _insert_event(
+                        event_id = _insert_event(
                             con, "new", target["id"], review_id,
                             _event_payload(target, scraped, "new")
                             | {"publish_date": assessment.estimate_date(self.settings.timezone)},
@@ -191,7 +215,9 @@ class MonitorEngine:
                         )
                 else:
                     review_id = int(existing["id"])
+                    previous_last_seen = existing["last_seen_at"]
                     event_type = None
+                    event_id = None
                     edit_date = existing["edit_date"]
                     if existing["status"] == "deleted":
                         event_type = "restored"
@@ -212,18 +238,20 @@ class MonitorEngine:
                     )
                     edit_date_update = None if assessment.time_subject == "last_edit" else edit_date
                     con.execute(
-                        """UPDATE reviews SET google_review_id=?,place_id=?,place_name=?,place_url=?,rating=?,body=?,
+                        """UPDATE reviews SET google_review_id=?,review_url=COALESCE(?,review_url),
+                        place_id=?,place_name=?,place_url=?,rating=?,body=?,
                         relative_time=?,edit_date=COALESCE(?,edit_date),photo_count=?,content_hash=?,status='active',
                         missing_count=0,last_seen_at=?,modified_at=CASE WHEN ?='modified' THEN ? ELSE modified_at END,
                         deleted_at=NULL WHERE id=?""",
                         (
-                            scraped.google_review_id, scraped.place_id, scraped.place_name, scraped.place_url,
+                            scraped.google_review_id, scraped.review_url, scraped.place_id,
+                            scraped.place_name, scraped.place_url,
                             scraped.rating, scraped.text, scraped.relative_time, edit_date_update,
-                            len(scraped.image_urls), new_hash, now_iso, event_type, now_iso, review_id,
+                            existing["photo_count"], new_hash, now_iso, event_type, now_iso, review_id,
                         ),
                     )
                     if event_type and baseline:
-                        _insert_event(
+                        event_id = _insert_event(
                             con, event_type, target["id"], review_id,
                             _event_payload(target, scraped, event_type)
                             | {
@@ -232,7 +260,17 @@ class MonitorEngine:
                             },
                             _delivery_state(target, now, event_type),
                         )
-                review_images.append((review_id, scraped.image_urls))
+                review_images.append(
+                    {
+                        "review_id": review_id,
+                        "urls": scraped.image_urls,
+                        "scraped": scraped,
+                        "existing": existing is not None,
+                        "event_id": event_id,
+                        "publish_date": assessment.estimate_date(self.settings.timezone),
+                        "previous_last_seen": previous_last_seen,
+                    }
+                )
 
             active_rows = con.execute(
                 "SELECT * FROM reviews WHERE target_id=? AND status='active'", (target["id"],)
@@ -289,8 +327,50 @@ class MonitorEngine:
                 con.execute("INSERT INTO meta(key,value) VALUES(?,?)", (summary_key, now_iso))
 
         saved_count = 0
-        for review_id, urls in review_images:
-            saved_count += len(await self.archive.archive(self.db, review_id, urls))
+        for job in review_images:
+            image_result = await self.archive.archive(
+                self.db, job["review_id"], job["urls"]
+            )
+            saved_count += len(image_result.saved_paths)
+            self.db.connection.execute(
+                "UPDATE reviews SET photo_count=? WHERE id=?",
+                (image_result.current_count, job["review_id"]),
+            )
+            image_changed = bool(
+                image_result.complete
+                and (image_result.added_count or image_result.removed_count)
+            )
+            additions = {
+                "photo_count": image_result.current_count,
+                "image_added_count": image_result.added_count,
+                "image_removed_count": image_result.removed_count,
+            }
+            if job["event_id"]:
+                _update_event_payload(self.db.connection, job["event_id"], additions)
+            elif baseline and job["existing"] and image_changed:
+                previous_seen = parse_iso(job["previous_last_seen"])
+                image_edit_date = (
+                    previous_seen + (now - previous_seen) / 2
+                ).astimezone(ZoneInfo(self.settings.timezone)).date().isoformat()
+                self.db.connection.execute(
+                    """UPDATE reviews SET modified_at=?,edit_date=?
+                    WHERE id=?""",
+                    (now_iso, image_edit_date, job["review_id"]),
+                )
+                _insert_event(
+                    self.db.connection,
+                    "modified",
+                    target["id"],
+                    job["review_id"],
+                    _event_payload(target, job["scraped"], "modified")
+                    | {
+                        "publish_date": job["publish_date"],
+                        "edit_date": image_edit_date,
+                    }
+                    | additions,
+                    _delivery_state(target, now, "modified"),
+                )
+            self.db.connection.commit()
         self._update_disk_state()
         if not baseline:
             self.db.create_event(

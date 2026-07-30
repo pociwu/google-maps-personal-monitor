@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -16,6 +17,15 @@ from .util import iso_now
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
 THUMBNAIL_MAX_EDGE = 480
 THUMBNAIL_QUALITY = 82
+
+
+@dataclass(frozen=True, slots=True)
+class ImageSyncResult:
+    saved_paths: tuple[str, ...]
+    current_count: int
+    added_count: int
+    removed_count: int
+    complete: bool
 
 
 class ImageArchive:
@@ -80,17 +90,34 @@ class ImageArchive:
         db.connection.commit()
         return built, failed
 
-    async def archive(self, db: Database, review_id: int, urls: Iterable[str]) -> list[str]:
-        saved: list[str] = []
-        if not self.has_capacity():
-            return saved
+    async def archive(self, db: Database, review_id: int, urls: Iterable[str]) -> ImageSyncResult:
+        source_urls = list(dict.fromkeys(urls))
+        prior_current = {
+            str(row["sha256"])
+            for row in db.connection.execute(
+                """SELECT sha256 FROM images
+                WHERE review_id=? AND status='saved' AND sha256 IS NOT NULL AND is_current=1""",
+                (review_id,),
+            ).fetchall()
+        }
+        if source_urls and not self.has_capacity():
+            return ImageSyncResult((), len(prior_current), 0, 0, False)
+        saved: dict[str, str] = {}
+        seen: set[str] = set()
+        complete = True
         async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
-            for source_url in dict.fromkeys(urls):
+            for source_url in source_urls:
                 row = db.connection.execute(
                     "SELECT * FROM images WHERE review_id=? AND source_url=?",
                     (review_id, source_url),
                 ).fetchone()
-                if row and row["status"] == "saved" and row["local_path"]:
+                if (
+                    row
+                    and row["status"] == "saved"
+                    and row["sha256"]
+                    and row["local_path"]
+                    and Path(row["local_path"]).exists()
+                ):
                     if not row["thumbnail_path"] or not Path(row["thumbnail_path"]).exists():
                         try:
                             thumbnail = self.create_thumbnail(Path(row["local_path"]), row["sha256"])
@@ -101,11 +128,20 @@ class ImageArchive:
                             db.connection.commit()
                         except Exception:
                             pass
-                    saved.append(str(row["local_path"]))
+                    digest = str(row["sha256"])
+                    seen.add(digest)
+                    saved[digest] = str(row["local_path"])
+                    db.connection.execute(
+                        "UPDATE images SET last_seen_at=?,error=NULL WHERE id=?",
+                        (iso_now(), row["id"]),
+                    )
+                    db.connection.commit()
                     continue
                 if not row:
                     cursor = db.connection.execute(
-                        "INSERT INTO images(review_id,source_url,status,first_seen_at) VALUES(?,?,'pending',?)",
+                        """INSERT INTO images
+                        (review_id,source_url,status,first_seen_at,is_current,missing_count)
+                        VALUES(?,?,'pending',?,0,0)""",
                         (review_id, source_url, iso_now()),
                     )
                     image_id = int(cursor.lastrowid)
@@ -134,15 +170,39 @@ class ImageArchive:
                         temporary.write_bytes(content)
                         os.replace(temporary, destination)
                     thumbnail = self.create_thumbnail(destination, digest)
-                    db.connection.execute(
-                        """UPDATE images SET sha256=?,local_path=?,thumbnail_path=?,byte_size=?,
-                        status='saved',error=NULL
-                        WHERE id=?""",
-                        (digest, str(destination), str(thumbnail), len(content), image_id),
-                    )
+                    canonical = db.connection.execute(
+                        """SELECT id,local_path FROM images
+                        WHERE review_id=? AND sha256=? AND status='saved' AND id<>?
+                        ORDER BY id LIMIT 1""",
+                        (review_id, digest, image_id),
+                    ).fetchone()
+                    if canonical:
+                        db.connection.execute(
+                            "UPDATE images SET last_seen_at=?,error=NULL WHERE id=?",
+                            (iso_now(), canonical["id"]),
+                        )
+                        db.connection.execute("DELETE FROM images WHERE id=?", (image_id,))
+                        saved_path = str(canonical["local_path"] or destination)
+                    else:
+                        db.connection.execute(
+                            """UPDATE images SET sha256=?,local_path=?,thumbnail_path=?,byte_size=?,
+                            status='saved',error=NULL,last_seen_at=?
+                            WHERE id=?""",
+                            (
+                                digest,
+                                str(destination),
+                                str(thumbnail),
+                                len(content),
+                                iso_now(),
+                                image_id,
+                            ),
+                        )
+                        saved_path = str(destination)
                     db.connection.commit()
-                    saved.append(str(destination))
+                    seen.add(digest)
+                    saved[digest] = saved_path
                 except Exception as exc:
+                    complete = False
                     db.connection.execute(
                         "UPDATE images SET status='failed',error=? WHERE id=?",
                         (str(exc)[:2000], image_id),
@@ -168,4 +228,53 @@ class ImageArchive:
                         review_id=review_id,
                         event_key=f"image-failure:{image_id}:{hashlib.sha256(str(exc).encode()).hexdigest()}",
                     )
-        return saved
+        removed_count = 0
+        if complete:
+            current_rows = db.connection.execute(
+                """SELECT id,sha256,missing_count FROM images
+                WHERE review_id=? AND status='saved' AND sha256 IS NOT NULL AND is_current=1""",
+                (review_id,),
+            ).fetchall()
+            for row in current_rows:
+                digest = str(row["sha256"])
+                if digest in seen:
+                    db.connection.execute(
+                        "UPDATE images SET missing_count=0,last_seen_at=? WHERE id=?",
+                        (iso_now(), row["id"]),
+                    )
+                    continue
+                missing_count = int(row["missing_count"]) + 1
+                if missing_count >= 2:
+                    db.connection.execute(
+                        "UPDATE images SET is_current=0,missing_count=? WHERE id=?",
+                        (missing_count, row["id"]),
+                    )
+                    removed_count += 1
+                else:
+                    db.connection.execute(
+                        "UPDATE images SET missing_count=? WHERE id=?",
+                        (missing_count, row["id"]),
+                    )
+            if seen:
+                placeholders = ",".join("?" for _ in seen)
+                db.connection.execute(
+                    f"""UPDATE images SET is_current=1,missing_count=0,last_seen_at=?
+                    WHERE review_id=? AND status='saved' AND sha256 IN ({placeholders})""",
+                    (iso_now(), review_id, *sorted(seen)),
+                )
+            db.connection.commit()
+        current_count = int(
+            db.connection.execute(
+                """SELECT COUNT(*) FROM images
+                WHERE review_id=? AND status='saved' AND sha256 IS NOT NULL AND is_current=1""",
+                (review_id,),
+            ).fetchone()[0]
+        )
+        added_count = len(seen - prior_current) if complete else 0
+        return ImageSyncResult(
+            tuple(saved.values()),
+            current_count,
+            added_count,
+            removed_count,
+            complete,
+        )

@@ -14,6 +14,7 @@ class ScrapedReview:
     rating: float | None
     text: str
     relative_time: str
+    review_url: str | None = None
     exact_timestamp: str | None = None
     explicitly_edited: bool = False
     image_urls: list[str] = field(default_factory=list)
@@ -24,7 +25,6 @@ class ScrapedReview:
             "place_url": self.place_url,
             "rating": self.rating,
             "text": self.text,
-            "photo_count": len(self.image_urls),
         }
 
     def to_dict(self) -> dict[str, Any]:

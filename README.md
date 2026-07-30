@@ -12,7 +12,7 @@
 - 正常巡查每 6～8 小時；日期切換附近可每 30～60 分鐘密集觀察。
 - 初次匯入靜默保存並傳送摘要；其後 24 小時觀察期不傳送內容事件。
 - Telegram 逐則發送，間隔 6～10 秒，已嘗試事件不重複發送。
-- 原圖永久保存，以 SHA-256 去重；另產生 480px WebP 縮圖。
+- 原圖永久保存；同一評論依 SHA-256 去除重複圖片引用，另產生 480px WebP 縮圖。
 - SQLite 保存日期證據、評論狀態與事件；每日建立本機快照。
 - 提供 Tailscale 使用的單頁唯讀 Web 儀表板。
 
@@ -100,7 +100,11 @@ http://100.x.x.x:8000/
 - 預設隱藏已刪除評論。
 - 僅評分項目顯示「（沒有文字）」與「僅評分」。
 - 已確認日期直接顯示，估算日期加「約」。
+- 星等旁顯示 Google 最近一次提供的相對時間。
+- 每則評論可按需載入完整日期推算證據，所有時間統一為 Asia/Taipei。
+- 優先連到 Google 單則評論；無法取得時明確降級為店家連結，舊資料再降級為 Google Maps 店家搜尋。
 - 縮圖延遲載入，燈箱才讀取原圖。
+- 目前圖片直接顯示；連續兩輪確認移除的永久原圖收進「歷史圖片」。
 - Web 使用原子產生的 SQLite 展示快照；快照、原圖與縮圖皆以唯讀方式掛載。
 - 沒有資料寫入路由、管理介面、下載功能或公開 JSON API。
 - 一般 access log 關閉，不記錄搜尋字串。
@@ -120,10 +124,14 @@ curl http://127.0.0.1:8000/healthz
 舊資料庫由新版第一次開啟前會備份至：
 
 ```text
-state/backups/pre-schema-v3-*.sqlite3
+state/backups/pre-schema-v4-*.sqlite3
 ```
 
 遷移失敗會自動還原。舊推算日期保留為 `legacy_publish_date`。
+
+schema v4 會先備份再清理同一評論內 SHA-256 相同的圖片引用，保留最早成功
+保存的一筆。舊圖片在遷移時全部先視為目前圖片，後續只有在連續兩次完整巡查
+都缺失時才移入歷史圖片。Google 圖片網址數量變動不再誤判為評論修改。
 
 ## 資料位置
 
@@ -185,7 +193,7 @@ sudo systemctl stop maps-monitor.timer maps-monitor-web.service
 cd /opt
 stamp="$(date +%Y%m%d-%H%M%S)"
 sudo mv maps-monitor "maps-monitor.pre-git-${stamp}"
-sudo git clone --branch v0.2.1 --depth 1 \
+sudo git clone --branch v0.3.0 --depth 1 \
   https://github.com/pociwu/google-maps-personal-monitor.git maps-monitor
 sudo cp "maps-monitor.pre-git-${stamp}/.env" maps-monitor/.env
 sudo cp "maps-monitor.pre-git-${stamp}/config/targets.yaml" \
@@ -205,7 +213,7 @@ Ubuntu 只部署版本標籤，不直接跟隨 `main`：
 
 ```bash
 cd /opt/maps-monitor
-sudo ./deploy/update.sh v0.2.1
+sudo ./deploy/update.sh v0.3.0
 ```
 
 更新程式會先備份、取得指定標籤、重建映像、補建縮圖並執行 Web 健康檢查；失敗時回到部署前的程式版本。

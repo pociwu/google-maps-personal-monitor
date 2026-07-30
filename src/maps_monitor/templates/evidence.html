@@ -1,0 +1,64 @@
+<div class="evidence-panel border rounded-3 p-3">
+  <dl class="row small mb-3">
+    <dt class="col-sm-4">目前結果</dt>
+    <dd class="col-sm-8">{{ review.publish_text }}</dd>
+    <dt class="col-sm-4">推算時間</dt>
+    <dd class="col-sm-8">{{ review.publish_estimate_text }}</dd>
+    <dt class="col-sm-4">可能區間</dt>
+    <dd class="col-sm-8">{{ review.publish_earliest_text }} ～ {{ review.publish_latest_text }}</dd>
+    <dt class="col-sm-4">可信度／精度</dt>
+    <dd class="col-sm-8">{{ review.confidence }}／{{ review.precision }}</dd>
+    <dt class="col-sm-4">推算依據</dt>
+    <dd class="col-sm-8">{{ review.basis }}</dd>
+    <dt class="col-sm-4">時間主體</dt>
+    <dd class="col-sm-8">{{ review.time_subject }}</dd>
+    <dt class="col-sm-4">模型版本</dt>
+    <dd class="col-sm-8">{{ review.date_model_version or '—' }}</dd>
+  </dl>
+
+  {% if review.edit_date or review.edit_estimate %}
+  <h4 class="h6">修改時間推算</h4>
+  <dl class="row small mb-3">
+    <dt class="col-sm-4">目前結果</dt>
+    <dd class="col-sm-8">{{ review.edit_text }}</dd>
+    <dt class="col-sm-4">推算時間</dt>
+    <dd class="col-sm-8">{{ review.edit_estimate_text }}</dd>
+    <dt class="col-sm-4">可能區間</dt>
+    <dd class="col-sm-8">{{ review.edit_earliest_text }} ～ {{ review.edit_latest_text }}</dd>
+    <dt class="col-sm-4">可信度</dt>
+    <dd class="col-sm-8">{{ review.edit_confidence or '—' }}</dd>
+    <dt class="col-sm-4">推算依據</dt>
+    <dd class="col-sm-8">{{ review.edit_basis or '—' }}</dd>
+  </dl>
+  {% endif %}
+
+  <h4 class="h6">觀察紀錄</h4>
+  {% if observations %}
+  <div class="table-responsive">
+    <table class="table table-sm align-middle evidence-table mb-0">
+      <thead>
+        <tr>
+          <th scope="col">巡查時間</th>
+          <th scope="col">Google 時間</th>
+          <th scope="col">解析</th>
+          <th scope="col">編輯</th>
+          <th scope="col">精確時間</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for observation in observations %}
+        <tr>
+          <td>{{ observation.observed_text }}</td>
+          <td>{{ observation.relative_time }}</td>
+          <td>{{ observation.parsed_text }}</td>
+          <td>{% if observation.is_edit %}是{% else %}否{% endif %}</td>
+          <td>{{ observation.exact_text }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="small text-body-secondary mb-0">尚無觀察紀錄。</p>
+  {% endif %}
+</div>

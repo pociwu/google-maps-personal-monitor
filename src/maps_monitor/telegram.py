@@ -63,6 +63,11 @@ def format_event(event_type: str, payload: dict[str, Any]) -> str:
         lines.append(f"推算修改日期：{payload['edit_date']}")
     if payload.get("photo_count") is not None:
         lines.append(f"圖片：{payload['photo_count']} 張")
+    if payload.get("image_added_count") or payload.get("image_removed_count"):
+        lines.append(
+            f"圖片變更：新增 {payload.get('image_added_count', 0)} 張；"
+            f"移除 {payload.get('image_removed_count', 0)} 張"
+        )
     if payload.get("review_count") is not None:
         lines.append(f"評論：{payload['review_count']} 則")
     if payload.get("saved_image_count") is not None:
@@ -84,7 +89,7 @@ def format_event(event_type: str, payload: dict[str, Any]) -> str:
     error = payload.get("error")
     if error:
         lines.extend(["", f"錯誤：{error}"])
-    url = payload.get("place_url") or payload.get("target_url")
+    url = payload.get("review_url") or payload.get("place_url") or payload.get("target_url")
     if url:
         lines.extend(["", str(url)])
     result = "\n".join(lines)

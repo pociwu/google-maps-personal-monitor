@@ -62,6 +62,19 @@ body {
   line-height: 1.75;
 }
 
+.date-evidence > summary,
+.review-card details > summary {
+  cursor: pointer;
+}
+
+.evidence-panel {
+  background: color-mix(in srgb, var(--bs-body-bg) 96%, var(--dashboard-accent) 4%);
+}
+
+.evidence-table {
+  min-width: 760px;
+}
+
 .review-images {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));

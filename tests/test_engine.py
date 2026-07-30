@@ -1,9 +1,11 @@
 from pathlib import Path
 import asyncio
+import json
 
 from maps_monitor.config import Settings, TargetConfig
 from maps_monitor.database import Database
 from maps_monitor.engine import MonitorEngine
+from maps_monitor.images import ImageSyncResult
 from maps_monitor.models import CrawlResult, ScrapedReview
 
 
@@ -108,4 +110,51 @@ def test_preexisting_edited_review_keeps_publish_date_unknown(tmp_path):
     assert row["publish_date"] is None
     assert row["edit_date"] is not None
     assert row["time_subject"] == "last_edit"
+    db.close()
+
+
+class _ImageResults:
+    def __init__(self, *results: ImageSyncResult):
+        self.results = iter(results)
+
+    async def archive(self, _database, _review_id, _urls):
+        return next(self.results)
+
+    def has_capacity(self):
+        return True
+
+
+def test_only_unique_image_set_changes_create_modified_event(tmp_path):
+    cfg = settings(tmp_path)
+    db = Database(cfg.database)
+    engine = MonitorEngine(cfg, db)
+    engine.archive = _ImageResults(
+        ImageSyncResult(("one",), 1, 1, 0, True),
+        ImageSyncResult(("one",), 1, 0, 0, True),
+        ImageSyncResult(("one", "two"), 2, 1, 0, True),
+    )
+    target = db.sync_targets(cfg.targets, 0)[0]
+    initial = review()
+    initial.image_urls = ["https://example.test/a"]
+    asyncio.run(engine.process_success(target, CrawlResult([initial], True, 1)))
+
+    target = db.connection.execute("SELECT * FROM targets WHERE id=?", (target["id"],)).fetchone()
+    duplicate_urls = review()
+    duplicate_urls.image_urls = ["https://example.test/a", "https://example.test/alias"]
+    asyncio.run(engine.process_success(target, CrawlResult([duplicate_urls], True, 1)))
+    assert db.connection.execute(
+        "SELECT COUNT(*) FROM events WHERE event_type='modified'"
+    ).fetchone()[0] == 0
+
+    target = db.connection.execute("SELECT * FROM targets WHERE id=?", (target["id"],)).fetchone()
+    new_unique_image = review()
+    new_unique_image.image_urls = ["https://example.test/a", "https://example.test/new"]
+    asyncio.run(engine.process_success(target, CrawlResult([new_unique_image], True, 1)))
+    event = db.connection.execute(
+        "SELECT payload_json FROM events WHERE event_type='modified'"
+    ).fetchone()
+    payload = json.loads(event["payload_json"])
+    assert payload["image_added_count"] == 1
+    assert payload["image_removed_count"] == 0
+    assert payload["photo_count"] == 2
     db.close()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import sqlite3
 import uuid
@@ -11,7 +12,7 @@ from typing import Any, Iterator
 
 from .config import TargetConfig
 from .dates import parse_relative
-from .util import iso_now, utc_now
+from .util import iso_now, stable_hash, utc_now
 
 
 SCHEMA = """
@@ -43,6 +44,7 @@ CREATE TABLE IF NOT EXISTS reviews (
     target_id INTEGER NOT NULL REFERENCES targets(id),
     review_key TEXT NOT NULL,
     google_review_id TEXT,
+    review_url TEXT,
     place_id TEXT,
     place_name TEXT NOT NULL,
     place_url TEXT,
@@ -100,6 +102,9 @@ CREATE TABLE IF NOT EXISTS images (
     status TEXT NOT NULL DEFAULT 'pending',
     error TEXT,
     first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT,
+    is_current INTEGER NOT NULL DEFAULT 1,
+    missing_count INTEGER NOT NULL DEFAULT 0,
     UNIQUE(review_id, source_url)
 );
 CREATE INDEX IF NOT EXISTS idx_images_sha ON images(sha256);
@@ -154,6 +159,7 @@ CREATE TABLE IF NOT EXISTS dense_targets (
 """
 
 REVIEW_MIGRATION_COLUMNS = {
+    "review_url": "TEXT",
     "date_source": "TEXT NOT NULL DEFAULT 'relative'",
     "legacy_publish_date": "TEXT",
     "publish_estimate": "TEXT",
@@ -181,6 +187,9 @@ OBSERVATION_MIGRATION_COLUMNS = {
 
 IMAGE_MIGRATION_COLUMNS = {
     "thumbnail_path": "TEXT",
+    "last_seen_at": "TEXT",
+    "is_current": "INTEGER NOT NULL DEFAULT 1",
+    "missing_count": "INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -216,9 +225,18 @@ class Database:
         old_image_columns = {
             row[1] for row in self.connection.execute("PRAGMA table_info(images)").fetchall()
         } if "images" in existing_tables else set()
+        existing_indexes = {
+            row[0]
+            for row in self.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
         migration_needed = bool(existing_tables) and (
             (bool(old_review_columns) and "publish_estimate" not in old_review_columns)
+            or (bool(old_review_columns) and "review_url" not in old_review_columns)
             or (bool(old_image_columns) and "thumbnail_path" not in old_image_columns)
+            or (bool(old_image_columns) and "is_current" not in old_image_columns)
+            or (bool(old_image_columns) and "uq_images_review_sha" not in existing_indexes)
         )
         migration_backup = self._backup_before_migration() if migration_needed else None
         try:
@@ -227,6 +245,22 @@ class Database:
             self._add_missing_columns("reviews", REVIEW_MIGRATION_COLUMNS)
             self._add_missing_columns("observations", OBSERVATION_MIGRATION_COLUMNS)
             self._add_missing_columns("images", IMAGE_MIGRATION_COLUMNS)
+            self.connection.execute(
+                """UPDATE images SET
+                last_seen_at=COALESCE(last_seen_at,first_seen_at),
+                is_current=COALESCE(is_current,1),
+                missing_count=COALESCE(missing_count,0)"""
+            )
+            scanned, removed = self._deduplicate_image_references()
+            rehashed = (
+                self._rebuild_review_content_hashes(old_review_columns)
+                if migration_needed else 0
+            )
+            self.connection.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS uq_images_review_sha
+                ON images(review_id,sha256)
+                WHERE status='saved' AND sha256 IS NOT NULL"""
+            )
             self.connection.execute(
                 """UPDATE reviews SET
                 legacy_publish_date=COALESCE(legacy_publish_date,publish_date),
@@ -243,10 +277,20 @@ class Database:
                 )
             self._backfill_observation_parsing()
             self.connection.execute(
-                "INSERT INTO meta(key,value) VALUES('schema_version','3') "
-                "ON CONFLICT(key) DO UPDATE SET value='3'"
+                "INSERT INTO meta(key,value) VALUES('schema_version','4') "
+                "ON CONFLICT(key) DO UPDATE SET value='4'"
             )
             self.connection.commit()
+            if migration_needed:
+                logging.info(
+                    "圖片去重遷移完成：掃描 %d 筆已保存圖片，刪除 %d 筆重複引用",
+                    scanned,
+                    removed,
+                )
+                logging.info(
+                    "評論內容雜湊遷移完成：重建 %d 則，圖片網址數量不再觸發修改",
+                    rehashed,
+                )
         except Exception:
             self.connection.rollback()
             self.connection.close()
@@ -256,10 +300,60 @@ class Database:
                 self.path.with_name(self.path.name + "-shm").unlink(missing_ok=True)
             raise
 
+    def _deduplicate_image_references(self) -> tuple[int, int]:
+        scanned = int(
+            self.connection.execute(
+                """SELECT COUNT(*) FROM images
+                WHERE status='saved' AND sha256 IS NOT NULL"""
+            ).fetchone()[0]
+        )
+        duplicate_ids = [
+            int(row[0])
+            for row in self.connection.execute(
+                """SELECT DISTINCT duplicate.id
+                FROM images AS duplicate
+                JOIN images AS keeper
+                  ON keeper.review_id=duplicate.review_id
+                 AND keeper.sha256=duplicate.sha256
+                 AND keeper.status='saved'
+                 AND keeper.id < duplicate.id
+                WHERE duplicate.status='saved' AND duplicate.sha256 IS NOT NULL"""
+            ).fetchall()
+        ]
+        if duplicate_ids:
+            placeholders = ",".join("?" for _ in duplicate_ids)
+            self.connection.execute(
+                f"DELETE FROM images WHERE id IN ({placeholders})",
+                duplicate_ids,
+            )
+        return scanned, len(duplicate_ids)
+
+    def _rebuild_review_content_hashes(self, old_columns: set[str]) -> int:
+        required = {"id", "place_name", "place_url", "rating", "body", "content_hash"}
+        if not required.issubset(old_columns):
+            return 0
+        rows = self.connection.execute(
+            "SELECT id,place_name,place_url,rating,body FROM reviews"
+        ).fetchall()
+        for row in rows:
+            content_hash = stable_hash(
+                {
+                    "place_name": row["place_name"],
+                    "place_url": row["place_url"],
+                    "rating": row["rating"],
+                    "text": row["body"],
+                }
+            )
+            self.connection.execute(
+                "UPDATE reviews SET content_hash=? WHERE id=?",
+                (content_hash, row["id"]),
+            )
+        return len(rows)
+
     def _backup_before_migration(self) -> Path:
         backup_dir = self.path.parent.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
-        destination = backup_dir / f"pre-schema-v3-{datetime.now().strftime('%Y%m%d-%H%M%S')}.sqlite3"
+        destination = backup_dir / f"pre-schema-v4-{datetime.now().strftime('%Y%m%d-%H%M%S')}.sqlite3"
         target = sqlite3.connect(destination)
         try:
             self.connection.backup(target)

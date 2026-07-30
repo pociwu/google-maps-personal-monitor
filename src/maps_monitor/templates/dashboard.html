@@ -116,8 +116,11 @@
                 <h3 class="h5 mb-0">{{ review.place_name }}</h3>
               </div>
               <div class="text-end">
+                <div class="d-flex flex-wrap justify-content-end align-items-center gap-2">
                 <div class="rating" aria-label="{{ review.rating or 0 }} 顆星">
                   {% for star in range(1, 6) %}<span aria-hidden="true">{% if review.rating and star <= review.rating %}★{% else %}☆{% endif %}</span>{% endfor %}
+                </div>
+                <span class="small text-body-secondary">{{ review.relative_time or 'Google 時間未知' }}</span>
                 </div>
                 {% if review.rating_only %}<span class="badge text-bg-secondary">僅評分</span>{% endif %}
                 {% if review.modified %}<span class="badge text-bg-info">曾修改</span>{% endif %}
@@ -128,7 +131,21 @@
             <div class="small text-body-secondary d-flex flex-wrap gap-x-3 gap-y-1">
               <span>{{ review.publish_text }}</span>
               {% if review.modified or review.edit_date %}<span>{{ review.edit_text }}</span>{% endif %}
+              {% if review.link_url %}
+              <a href="{{ review.link_url }}" target="_blank" rel="noopener noreferrer">
+                {{ review.link_label }}
+              </a>
+              {% endif %}
             </div>
+            {% if review.status == 'deleted' and review.review_url %}
+            <p class="small text-warning-emphasis mt-2 mb-0">Google 原頁可能已不存在。</p>
+            {% endif %}
+            <details class="date-evidence mt-3" data-evidence-url="{{ review.evidence_url }}">
+              <summary>查看日期推算證據</summary>
+              <div class="evidence-content mt-2" data-evidence-content>
+                <p class="small text-body-secondary mb-0">展開後載入完整證據。</p>
+              </div>
+            </details>
             {% if review.images %}
             <div class="review-images mt-3">
               {% for image in review.images %}
@@ -140,6 +157,24 @@
               </button>
               {% endfor %}
             </div>
+            {% endif %}
+            {% if review.historical_images %}
+            <details class="mt-3">
+              <summary>歷史圖片（{{ review.historical_images|length }}）</summary>
+              <div class="review-images mt-2">
+                {% for image in review.historical_images %}
+                <div>
+                  <button class="image-button" type="button" data-bs-toggle="modal"
+                          data-bs-target="#imageModal" data-original="{{ image.original_url }}"
+                          aria-label="查看 {{ review.place_name }} 的歷史圖片 {{ loop.index }}">
+                    <img src="{{ image.thumbnail_url }}" loading="lazy"
+                         alt="{{ review.place_name }}的歷史評論圖片 {{ loop.index }}">
+                  </button>
+                  <p class="small text-body-secondary mt-1 mb-0">最後看見：{{ image.last_seen_text }}</p>
+                </div>
+                {% endfor %}
+              </div>
+            </details>
             {% endif %}
           </div>
         </article>
