@@ -3,7 +3,7 @@ import io
 from pathlib import Path
 
 import httpx
-from PIL import Image
+from PIL import Image, PngImagePlugin
 
 from maps_monitor.database import Database
 import maps_monitor.images as images_module
@@ -51,9 +51,13 @@ def test_builds_webp_thumbnail_without_changing_original(tmp_path: Path):
     database.close()
 
 
-def _png_bytes(color: str = "red") -> bytes:
+def _png_bytes(color: str = "red", metadata: str | None = None) -> bytes:
     output = io.BytesIO()
-    Image.new("RGB", (20, 20), color).save(output, format="PNG")
+    pnginfo = None
+    if metadata is not None:
+        pnginfo = PngImagePlugin.PngInfo()
+        pnginfo.add_text("variant", metadata)
+    Image.new("RGB", (20, 20), color).save(output, format="PNG", pnginfo=pnginfo)
     return output.getvalue()
 
 
@@ -152,4 +156,94 @@ def test_incomplete_image_download_preserves_previous_current_set(tmp_path: Path
     assert result.current_count == 1
     assert result.added_count == 0
     assert result.removed_count == 0
+    database.close()
+
+
+def test_archive_deduplicates_same_pixels_with_different_file_bytes(
+    tmp_path: Path, monkeypatch
+):
+    variants = {
+        "/image-a": _png_bytes(metadata="first encoding"),
+        "/image-b": _png_bytes(metadata="second encoding"),
+    }
+    assert variants["/image-a"] != variants["/image-b"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=variants[request.url.path],
+            headers={"content-type": "image/png"},
+        )
+
+    real_client = httpx.AsyncClient
+
+    def client_factory(*_args, **_kwargs):
+        return real_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(images_module.httpx, "AsyncClient", client_factory)
+    database = Database(tmp_path / "data" / "monitor.sqlite3")
+    review_id = _review(database)
+    archive = ImageArchive(tmp_path / "data" / "images", 0, 0)
+
+    result = asyncio.run(
+        archive.archive(
+            database,
+            review_id,
+            ("https://example.test/image-a", "https://example.test/image-b"),
+        )
+    )
+    rows = database.connection.execute(
+        """SELECT sha256 FROM images
+        WHERE review_id=? AND status='saved' AND is_current=1""",
+        (review_id,),
+    ).fetchall()
+
+    assert result.current_count == 1
+    assert len(rows) == 1
+    database.close()
+
+
+def test_archive_keeps_images_when_even_one_pixel_differs(tmp_path: Path, monkeypatch):
+    first = Image.new("RGB", (20, 20), "red")
+    second = first.copy()
+    second.putpixel((10, 10), (254, 0, 0))
+    variants = {}
+    for path, image in (("/image-a", first), ("/image-b", second)):
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+        variants[path] = output.getvalue()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=variants[request.url.path],
+            headers={"content-type": "image/png"},
+        )
+
+    real_client = httpx.AsyncClient
+
+    def client_factory(*_args, **_kwargs):
+        return real_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(images_module.httpx, "AsyncClient", client_factory)
+    database = Database(tmp_path / "data" / "monitor.sqlite3")
+    review_id = _review(database)
+    archive = ImageArchive(tmp_path / "data" / "images", 0, 0)
+
+    result = asyncio.run(
+        archive.archive(
+            database,
+            review_id,
+            ("https://example.test/image-a", "https://example.test/image-b"),
+        )
+    )
+    rows = database.connection.execute(
+        """SELECT sha256,pixel_sha256 FROM images
+        WHERE review_id=? AND status='saved' AND is_current=1""",
+        (review_id,),
+    ).fetchall()
+
+    assert result.current_count == 2
+    assert len(rows) == 2
+    assert len({row["pixel_sha256"] for row in rows}) == 2
     database.close()

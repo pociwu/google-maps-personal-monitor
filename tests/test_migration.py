@@ -1,4 +1,7 @@
 import sqlite3
+import io
+
+from PIL import Image, PngImagePlugin
 
 from maps_monitor.database import Database
 from maps_monitor.util import stable_hash
@@ -26,7 +29,7 @@ def test_old_database_is_backed_up_and_migrated(tmp_path):
     assert "publish_estimate" in columns
     row = db.connection.execute("SELECT legacy_publish_date FROM reviews WHERE id=1").fetchone()
     assert row[0] == "2026-07-09"
-    assert list((tmp_path / "backups").glob("pre-schema-v4-*.sqlite3"))
+    assert list((tmp_path / "backups").glob("pre-schema-v5-*.sqlite3"))
     db.close()
 
 
@@ -101,8 +104,72 @@ def test_schema_v4_backs_up_and_removes_duplicate_image_references(tmp_path):
     assert rows[0]["missing_count"] == 0
     assert rows[0]["last_seen_at"] == now
     assert "review_url" in review_columns
-    assert schema_version == "4"
+    assert schema_version == "5"
     assert migrated_hash == stable_hash(
         {"place_name": "店家", "place_url": None, "rating": None, "text": "內容"}
     )
-    assert list((tmp_path / "backups").glob("pre-schema-v4-*.sqlite3"))
+    assert list((tmp_path / "backups").glob("pre-schema-v5-*.sqlite3"))
+
+
+def test_schema_v5_removes_byte_distinct_images_with_identical_pixels(tmp_path):
+    data = tmp_path / "data"
+    image_dir = data / "images"
+    image_dir.mkdir(parents=True)
+    image_paths = []
+    for index, metadata in enumerate(("first encoding", "second encoding"), start=1):
+        pnginfo = PngImagePlugin.PngInfo()
+        pnginfo.add_text("variant", metadata)
+        output = io.BytesIO()
+        Image.new("RGB", (20, 20), "red").save(output, format="PNG", pnginfo=pnginfo)
+        image_path = image_dir / f"{index}.png"
+        image_path.write_bytes(output.getvalue())
+        image_paths.append(image_path)
+
+    path = data / "monitor.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE images (
+            id INTEGER PRIMARY KEY,review_id INTEGER,source_url TEXT,sha256 TEXT,
+            local_path TEXT,thumbnail_path TEXT,byte_size INTEGER,status TEXT,error TEXT,
+            first_seen_at TEXT,last_seen_at TEXT,is_current INTEGER DEFAULT 1,
+            missing_count INTEGER DEFAULT 0,UNIQUE(review_id,source_url)
+        );
+        CREATE TABLE meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);
+        """
+    )
+    now = "2026-07-30T00:00:00+00:00"
+    for image_id, image_path in enumerate(image_paths, start=1):
+        connection.execute(
+            """INSERT INTO images
+            (id,review_id,source_url,sha256,local_path,status,first_seen_at,last_seen_at)
+            VALUES(?,?,?,?,?,'saved',?,?)""",
+            (
+                image_id,
+                1,
+                f"https://example.test/{image_id}",
+                f"{image_id}" * 64,
+                str(image_path),
+                now,
+                now,
+            ),
+        )
+    connection.commit()
+    connection.close()
+
+    database = Database(path)
+    rows = database.connection.execute(
+        "SELECT id,pixel_sha256 FROM images WHERE status='saved' ORDER BY id"
+    ).fetchall()
+    indexes = {
+        row[0]
+        for row in database.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+    }
+    database.close()
+
+    assert len(rows) == 1
+    assert rows[0]["pixel_sha256"]
+    assert "uq_images_review_pixels" in indexes
+    assert list((tmp_path / "backups").glob("pre-schema-v5-*.sqlite3"))

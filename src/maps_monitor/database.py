@@ -12,6 +12,7 @@ from typing import Any, Iterator
 
 from .config import TargetConfig
 from .dates import parse_relative
+from .image_fingerprint import decoded_pixel_sha256
 from .util import iso_now, stable_hash, utc_now
 
 
@@ -96,6 +97,7 @@ CREATE TABLE IF NOT EXISTS images (
     review_id INTEGER NOT NULL REFERENCES reviews(id),
     source_url TEXT NOT NULL,
     sha256 TEXT,
+    pixel_sha256 TEXT,
     local_path TEXT,
     thumbnail_path TEXT,
     byte_size INTEGER,
@@ -186,6 +188,7 @@ OBSERVATION_MIGRATION_COLUMNS = {
 }
 
 IMAGE_MIGRATION_COLUMNS = {
+    "pixel_sha256": "TEXT",
     "thumbnail_path": "TEXT",
     "last_seen_at": "TEXT",
     "is_current": "INTEGER NOT NULL DEFAULT 1",
@@ -237,6 +240,8 @@ class Database:
             or (bool(old_image_columns) and "thumbnail_path" not in old_image_columns)
             or (bool(old_image_columns) and "is_current" not in old_image_columns)
             or (bool(old_image_columns) and "uq_images_review_sha" not in existing_indexes)
+            or (bool(old_image_columns) and "pixel_sha256" not in old_image_columns)
+            or (bool(old_image_columns) and "uq_images_review_pixels" not in existing_indexes)
         )
         migration_backup = self._backup_before_migration() if migration_needed else None
         try:
@@ -252,6 +257,8 @@ class Database:
                 missing_count=COALESCE(missing_count,0)"""
             )
             scanned, removed = self._deduplicate_image_references()
+            fingerprinted, fingerprint_failures = self._backfill_image_pixel_fingerprints()
+            pixel_scanned, pixel_removed = self._deduplicate_pixel_references()
             rehashed = (
                 self._rebuild_review_content_hashes(old_review_columns)
                 if migration_needed else 0
@@ -260,6 +267,11 @@ class Database:
                 """CREATE UNIQUE INDEX IF NOT EXISTS uq_images_review_sha
                 ON images(review_id,sha256)
                 WHERE status='saved' AND sha256 IS NOT NULL"""
+            )
+            self.connection.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS uq_images_review_pixels
+                ON images(review_id,pixel_sha256)
+                WHERE status='saved' AND pixel_sha256 IS NOT NULL"""
             )
             self.connection.execute(
                 """UPDATE reviews SET
@@ -277,8 +289,8 @@ class Database:
                 )
             self._backfill_observation_parsing()
             self.connection.execute(
-                "INSERT INTO meta(key,value) VALUES('schema_version','4') "
-                "ON CONFLICT(key) DO UPDATE SET value='4'"
+                "INSERT INTO meta(key,value) VALUES('schema_version','5') "
+                "ON CONFLICT(key) DO UPDATE SET value='5'"
             )
             self.connection.commit()
             if migration_needed:
@@ -286,6 +298,13 @@ class Database:
                     "圖片去重遷移完成：掃描 %d 筆已保存圖片，刪除 %d 筆重複引用",
                     scanned,
                     removed,
+                )
+                logging.info(
+                    "圖片像素指紋：新增 %d，失敗 %d；掃描 %d，刪除像素重複引用 %d",
+                    fingerprinted,
+                    fingerprint_failures,
+                    pixel_scanned,
+                    pixel_removed,
                 )
                 logging.info(
                     "評論內容雜湊遷移完成：重建 %d 則，圖片網址數量不再觸發修改",
@@ -328,6 +347,60 @@ class Database:
             )
         return scanned, len(duplicate_ids)
 
+    def _backfill_image_pixel_fingerprints(self) -> tuple[int, int]:
+        rows = self.connection.execute(
+            """SELECT id,local_path FROM images
+            WHERE status='saved' AND pixel_sha256 IS NULL AND local_path IS NOT NULL"""
+        ).fetchall()
+        fingerprinted = 0
+        failed = 0
+        for row in rows:
+            try:
+                digest = decoded_pixel_sha256(Path(row["local_path"]))
+            except Exception as exc:
+                logging.warning(
+                    "無法建立圖片像素指紋：image_id=%s path=%s error=%s",
+                    row["id"],
+                    row["local_path"],
+                    exc,
+                )
+                failed += 1
+                continue
+            self.connection.execute(
+                "UPDATE images SET pixel_sha256=? WHERE id=?",
+                (digest, row["id"]),
+            )
+            fingerprinted += 1
+        return fingerprinted, failed
+
+    def _deduplicate_pixel_references(self) -> tuple[int, int]:
+        scanned = int(
+            self.connection.execute(
+                """SELECT COUNT(*) FROM images
+                WHERE status='saved' AND pixel_sha256 IS NOT NULL"""
+            ).fetchone()[0]
+        )
+        duplicate_ids = [
+            int(row[0])
+            for row in self.connection.execute(
+                """SELECT DISTINCT duplicate.id
+                FROM images AS duplicate
+                JOIN images AS keeper
+                  ON keeper.review_id=duplicate.review_id
+                 AND keeper.pixel_sha256=duplicate.pixel_sha256
+                 AND keeper.status='saved'
+                 AND keeper.id < duplicate.id
+                WHERE duplicate.status='saved' AND duplicate.pixel_sha256 IS NOT NULL"""
+            ).fetchall()
+        ]
+        if duplicate_ids:
+            placeholders = ",".join("?" for _ in duplicate_ids)
+            self.connection.execute(
+                f"DELETE FROM images WHERE id IN ({placeholders})",
+                duplicate_ids,
+            )
+        return scanned, len(duplicate_ids)
+
     def _rebuild_review_content_hashes(self, old_columns: set[str]) -> int:
         required = {"id", "place_name", "place_url", "rating", "body", "content_hash"}
         if not required.issubset(old_columns):
@@ -353,7 +426,7 @@ class Database:
     def _backup_before_migration(self) -> Path:
         backup_dir = self.path.parent.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
-        destination = backup_dir / f"pre-schema-v4-{datetime.now().strftime('%Y%m%d-%H%M%S')}.sqlite3"
+        destination = backup_dir / f"pre-schema-v5-{datetime.now().strftime('%Y%m%d-%H%M%S')}.sqlite3"
         target = sqlite3.connect(destination)
         try:
             self.connection.backup(target)

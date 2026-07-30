@@ -11,6 +11,7 @@ import httpx
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .database import Database
+from .image_fingerprint import decoded_pixel_sha256
 from .util import iso_now
 
 
@@ -169,12 +170,14 @@ class ImageArchive:
                         temporary = destination.with_suffix(destination.suffix + ".part")
                         temporary.write_bytes(content)
                         os.replace(temporary, destination)
+                    pixel_digest = decoded_pixel_sha256(destination)
                     thumbnail = self.create_thumbnail(destination, digest)
                     canonical = db.connection.execute(
-                        """SELECT id,local_path FROM images
-                        WHERE review_id=? AND sha256=? AND status='saved' AND id<>?
+                        """SELECT id,sha256,local_path FROM images
+                        WHERE review_id=? AND status='saved' AND id<>?
+                          AND (sha256=? OR pixel_sha256=?)
                         ORDER BY id LIMIT 1""",
-                        (review_id, digest, image_id),
+                        (review_id, image_id, digest, pixel_digest),
                     ).fetchone()
                     if canonical:
                         db.connection.execute(
@@ -182,14 +185,16 @@ class ImageArchive:
                             (iso_now(), canonical["id"]),
                         )
                         db.connection.execute("DELETE FROM images WHERE id=?", (image_id,))
+                        canonical_digest = str(canonical["sha256"])
                         saved_path = str(canonical["local_path"] or destination)
                     else:
                         db.connection.execute(
-                            """UPDATE images SET sha256=?,local_path=?,thumbnail_path=?,byte_size=?,
-                            status='saved',error=NULL,last_seen_at=?
+                            """UPDATE images SET sha256=?,pixel_sha256=?,local_path=?,
+                            thumbnail_path=?,byte_size=?,status='saved',error=NULL,last_seen_at=?
                             WHERE id=?""",
                             (
                                 digest,
+                                pixel_digest,
                                 str(destination),
                                 str(thumbnail),
                                 len(content),
@@ -197,10 +202,11 @@ class ImageArchive:
                                 image_id,
                             ),
                         )
+                        canonical_digest = digest
                         saved_path = str(destination)
                     db.connection.commit()
-                    seen.add(digest)
-                    saved[digest] = saved_path
+                    seen.add(canonical_digest)
+                    saved[canonical_digest] = saved_path
                 except Exception as exc:
                     complete = False
                     db.connection.execute(
