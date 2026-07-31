@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 import os
 import re
-import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -50,7 +49,6 @@ IMAGE_ROOT = Path(
 TARGETS_CONFIG_PATH = Path(
     os.getenv("MAPS_MONITOR_TARGETS_CONFIG", "/app/config/targets.yaml")
 ).resolve()
-ADMIN_PASSWORD = os.getenv("DASHBOARD_ADMIN_PASSWORD", "")
 PAGE_SIZE = 20
 CONFIRMED_CONFIDENCE = {"confirmed_time", "confirmed_date"}
 IMAGE_TOKEN = re.compile(r"^[0-9a-f]{64}$")
@@ -70,8 +68,6 @@ MANAGEMENT_MESSAGES = {
     "unavailable": ("danger", "Google Maps 網址目前無法讀取或已導向其他頁面。"),
     "duplicate": ("warning", "這個貢獻者網址已在監控清單中。"),
     "limit": ("warning", "監控對象已達 10 人上限。"),
-    "unauthorized": ("danger", "管理密碼錯誤，未變更監控清單。"),
-    "disabled": ("warning", "尚未設定網頁管理密碼，因此新增與移除功能未啟用。"),
     "not_found": ("warning", "監控清單中找不到這個網址，可能已被移除。"),
     "config_error": ("danger", "監控設定檔暫時無法更新。"),
 }
@@ -395,7 +391,6 @@ def _dashboard_data(request: Request) -> dict:
         "next_href": _query_url(params, page=page + 1) if page < total_pages else None,
         "warning_hours": STALE_WARNING_HOURS,
         "critical_hours": STALE_CRITICAL_HOURS,
-        "management_enabled": bool(ADMIN_PASSWORD),
         "management_message": MANAGEMENT_MESSAGES.get(query.get("manage", "")),
     }
 
@@ -506,11 +501,6 @@ async def _management_fields(request: Request) -> dict[str, str]:
     return {key: values[-1] for key, values in parsed.items() if values}
 
 
-def _authorized(fields: dict[str, str]) -> bool:
-    supplied = fields.get("admin_password", "")
-    return bool(ADMIN_PASSWORD) and secrets.compare_digest(supplied, ADMIN_PASSWORD)
-
-
 def _management_redirect(code: str) -> RedirectResponse:
     return RedirectResponse(url=f"/?{urlencode({'manage': code})}", status_code=303)
 
@@ -555,10 +545,6 @@ def create_app() -> FastAPI:
     async def target_add(request: Request):
         try:
             fields = await _management_fields(request)
-            if not ADMIN_PASSWORD:
-                return _management_redirect("disabled")
-            if not _authorized(fields):
-                return _management_redirect("unauthorized")
             url = fields.get("target_url", "")
             if len(url) > 1000:
                 raise TargetAdminError("invalid")
@@ -572,10 +558,6 @@ def create_app() -> FastAPI:
     async def target_remove(request: Request):
         try:
             fields = await _management_fields(request)
-            if not ADMIN_PASSWORD:
-                return _management_redirect("disabled")
-            if not _authorized(fields):
-                return _management_redirect("unauthorized")
             remove_target(TARGETS_CONFIG_PATH, fields.get("target_url", ""))
             return _management_redirect("removed")
         except TargetAdminError as exc:

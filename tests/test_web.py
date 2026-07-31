@@ -276,7 +276,7 @@ def test_dashboard_uncertainty_and_high_confidence_interval(tmp_path, monkeypatc
     assert "高可信日期確認區間" not in estimated_evidence.text
 
 
-def test_dashboard_can_add_and_remove_validated_target(tmp_path, monkeypatch):
+def test_dashboard_can_add_and_remove_validated_target_without_password(tmp_path, monkeypatch):
     database_path, image_root, _digest = _seed(tmp_path)
     config = tmp_path / "config" / "targets.yaml"
     config.parent.mkdir()
@@ -290,7 +290,6 @@ targets:
         encoding="utf-8",
     )
     monkeypatch.setenv("MAPS_MONITOR_TARGETS_CONFIG", str(config))
-    monkeypatch.setenv("DASHBOARD_ADMIN_PASSWORD", "correct horse")
     client = _client(monkeypatch, database_path, image_root)
 
     async def valid_target(_value):
@@ -302,23 +301,9 @@ targets:
     assert "驗證並新增" in dashboard.text
     assert 'formaction="/targets/remove"' in dashboard.text
 
-    unauthorized = client.post(
-        "/targets/add",
-        data={
-            "target_url": "https://www.google.com/maps/contrib/2/reviews",
-            "admin_password": "wrong",
-        },
-        follow_redirects=False,
-    )
-    assert unauthorized.headers["location"] == "/?manage=unauthorized"
-    assert "新增人物" not in config.read_text(encoding="utf-8")
-
     added = client.post(
         "/targets/add",
-        data={
-            "target_url": "https://www.google.com/maps/contrib/2/reviews",
-            "admin_password": "correct horse",
-        },
+        data={"target_url": "https://www.google.com/maps/contrib/2/reviews"},
         follow_redirects=False,
     )
     assert added.status_code == 303
@@ -327,10 +312,7 @@ targets:
 
     removed = client.post(
         "/targets/remove",
-        data={
-            "target_url": "https://www.google.com/maps/contrib/1/reviews",
-            "admin_password": "correct horse",
-        },
+        data={"target_url": "https://www.google.com/maps/contrib/1/reviews"},
         follow_redirects=False,
     )
     assert removed.headers["location"] == "/?manage=removed"

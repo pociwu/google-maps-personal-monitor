@@ -2,7 +2,7 @@ services:
   monitor:
     build:
       context: .
-    image: maps-contributor-monitor:0.3.8
+    image: maps-contributor-monitor:0.3.9
     platform: linux/arm64
     user: "0:0"
     init: true
@@ -24,7 +24,7 @@ services:
   web:
     build:
       context: .
-    image: maps-contributor-monitor:0.3.8
+    image: maps-contributor-monitor:0.3.9
     platform: linux/arm64
     user: "0:0"
     init: true
