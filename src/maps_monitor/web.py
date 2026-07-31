@@ -3,23 +3,36 @@ from __future__ import annotations
 import math
 import os
 import re
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Iterator
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .dates import normalize_relative_label
+from .target_admin import (
+    TargetAdminError,
+    add_target,
+    remove_target,
+    validate_contributor_url,
+)
 
 
 try:
@@ -34,6 +47,10 @@ DATABASE_PATH = Path(
 IMAGE_ROOT = Path(
     os.getenv("MAPS_MONITOR_IMAGE_DIR", "/app/state/data/images")
 ).resolve()
+TARGETS_CONFIG_PATH = Path(
+    os.getenv("MAPS_MONITOR_TARGETS_CONFIG", "/app/config/targets.yaml")
+).resolve()
+ADMIN_PASSWORD = os.getenv("DASHBOARD_ADMIN_PASSWORD", "")
 PAGE_SIZE = 20
 CONFIRMED_CONFIDENCE = {"confirmed_time", "confirmed_date"}
 IMAGE_TOKEN = re.compile(r"^[0-9a-f]{64}$")
@@ -45,6 +62,18 @@ PARSED_UNIT_LABELS = {
     "week": "週",
     "month": "個月",
     "year": "年",
+}
+MANAGEMENT_MESSAGES = {
+    "added": ("success", "網址驗證成功；已加入監控清單，下一輪巡查後顯示卡片。"),
+    "removed": ("success", "已移出監控清單；下一輪巡查後卡片會消失，歷史資料仍保留。"),
+    "invalid": ("danger", "網址格式錯誤，請輸入 Google Maps 公開貢獻者評論網址。"),
+    "unavailable": ("danger", "Google Maps 網址目前無法讀取或已導向其他頁面。"),
+    "duplicate": ("warning", "這個貢獻者網址已在監控清單中。"),
+    "limit": ("warning", "監控對象已達 10 人上限。"),
+    "unauthorized": ("danger", "管理密碼錯誤，未變更監控清單。"),
+    "disabled": ("warning", "尚未設定網頁管理密碼，因此新增與移除功能未啟用。"),
+    "not_found": ("warning", "監控清單中找不到這個網址，可能已被移除。"),
+    "config_error": ("danger", "監控設定檔暫時無法更新。"),
 }
 
 
@@ -217,14 +246,15 @@ def _dashboard_data(request: Request) -> dict:
     }
     with _read_connection() as connection:
         contributor_rows = connection.execute(
-            """SELECT t.name,t.last_success_at,
+            """SELECT t.name,t.url,t.last_success_at,
             COUNT(r.id) AS total_count,
             COALESCE(SUM(CASE WHEN r.status='active' THEN 1 ELSE 0 END),0) AS active_count,
             COALESCE(SUM(CASE WHEN r.modified_at IS NOT NULL THEN 1 ELSE 0 END),0) AS modified_count,
             COALESCE(SUM(CASE WHEN r.status='deleted' THEN 1 ELSE 0 END),0) AS deleted_count,
             COALESCE(SUM(CASE WHEN TRIM(r.body)='' THEN 1 ELSE 0 END),0) AS rating_only_count
             FROM targets t LEFT JOIN reviews r ON r.target_id=t.id
-            WHERE t.enabled=1 GROUP BY t.id,t.name,t.last_success_at ORDER BY t.name"""
+            WHERE t.enabled=1
+            GROUP BY t.id,t.name,t.url,t.last_success_at ORDER BY t.name"""
         ).fetchall()
         contributor_names = {row["name"] for row in contributor_rows}
         if contributor and contributor not in contributor_names:
@@ -365,6 +395,8 @@ def _dashboard_data(request: Request) -> dict:
         "next_href": _query_url(params, page=page + 1) if page < total_pages else None,
         "warning_hours": STALE_WARNING_HOURS,
         "critical_hours": STALE_CRITICAL_HOURS,
+        "management_enabled": bool(ADMIN_PASSWORD),
+        "management_message": MANAGEMENT_MESSAGES.get(query.get("manage", "")),
     }
 
 
@@ -459,6 +491,30 @@ def _render(name: str, context: dict, status_code: int = 200) -> HTMLResponse:
     return HTMLResponse(template.render(**context), status_code=status_code)
 
 
+async def _management_fields(request: Request) -> dict[str, str]:
+    if request.headers.get("content-type", "").split(";", 1)[0] != (
+        "application/x-www-form-urlencoded"
+    ):
+        raise TargetAdminError("invalid")
+    body = await request.body()
+    if len(body) > 4096:
+        raise TargetAdminError("invalid")
+    try:
+        parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+    except UnicodeDecodeError as exc:
+        raise TargetAdminError("invalid") from exc
+    return {key: values[-1] for key, values in parsed.items() if values}
+
+
+def _authorized(fields: dict[str, str]) -> bool:
+    supplied = fields.get("admin_password", "")
+    return bool(ADMIN_PASSWORD) and secrets.compare_digest(supplied, ADMIN_PASSWORD)
+
+
+def _management_redirect(code: str) -> RedirectResponse:
+    return RedirectResponse(url=f"/?{urlencode({'manage': code})}", status_code=303)
+
+
 def create_app() -> FastAPI:
     application = FastAPI(
         title="Google Maps 個人評論監控",
@@ -494,6 +550,36 @@ def create_app() -> FastAPI:
             return _render("dashboard.html", _dashboard_data(request))
         except sqlite3.Error:
             return _render("unavailable.html", {}, status_code=503)
+
+    @application.post("/targets/add")
+    async def target_add(request: Request):
+        try:
+            fields = await _management_fields(request)
+            if not ADMIN_PASSWORD:
+                return _management_redirect("disabled")
+            if not _authorized(fields):
+                return _management_redirect("unauthorized")
+            url = fields.get("target_url", "")
+            if len(url) > 1000:
+                raise TargetAdminError("invalid")
+            canonical, name = await validate_contributor_url(url)
+            add_target(TARGETS_CONFIG_PATH, canonical, name)
+            return _management_redirect("added")
+        except TargetAdminError as exc:
+            return _management_redirect(exc.code)
+
+    @application.post("/targets/remove")
+    async def target_remove(request: Request):
+        try:
+            fields = await _management_fields(request)
+            if not ADMIN_PASSWORD:
+                return _management_redirect("disabled")
+            if not _authorized(fields):
+                return _management_redirect("unauthorized")
+            remove_target(TARGETS_CONFIG_PATH, fields.get("target_url", ""))
+            return _management_redirect("removed")
+        except TargetAdminError as exc:
+            return _management_redirect(exc.code)
 
     @application.get("/media/{digest}/{kind}")
     def media(digest: str, kind: str):

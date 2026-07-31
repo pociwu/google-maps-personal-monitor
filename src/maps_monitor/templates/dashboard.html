@@ -33,6 +33,37 @@
           <p class="small text-body-secondary mb-0">最後更新：{{ last_updated }}</p>
         </div>
       </div>
+      {% if management_message %}
+      <div class="alert alert-{{ management_message[0] }}" role="status">
+        {{ management_message[1] }}
+      </div>
+      {% endif %}
+      <form id="target-management" class="card card-body mb-3"
+            method="post" action="/targets/add">
+        <div class="row g-2 align-items-end">
+          <div class="col-12 col-lg-7">
+            <label class="form-label" for="target-url">Google Maps 貢獻者評論網址</label>
+            <input class="form-control" id="target-url" name="target_url"
+                   type="url" inputmode="url" maxlength="1000"
+                   placeholder="https://www.google.com/maps/contrib/…/reviews"
+                   {% if management_enabled %}required{% else %}disabled{% endif %}>
+          </div>
+          <div class="col-8 col-lg-3">
+            <label class="form-label" for="admin-password">管理密碼</label>
+            <input class="form-control" id="admin-password" name="admin_password"
+                   type="password" maxlength="256" autocomplete="current-password"
+                   {% if management_enabled %}required{% else %}disabled{% endif %}>
+          </div>
+          <div class="col-4 col-lg-2 d-grid">
+            <button class="btn btn-primary" type="submit"
+                    {% if not management_enabled %}disabled{% endif %}>驗證並新增</button>
+          </div>
+        </div>
+        <p class="small text-body-secondary mt-2 mb-0">
+          新增前會驗證網址格式及 Google Maps 是否可讀；最多監控 10 人。
+          {% if not management_enabled %}請先在 .env 設定 DASHBOARD_ADMIN_PASSWORD。{% endif %}
+        </p>
+      </form>
       <div class="contributor-strip pb-2">
         <a class="contributor-card card text-decoration-none {% if not selected_contributor %}border-primary selected{% endif %}"
            href="{{ all_href }}" {% if not selected_contributor %}aria-current="true"{% endif %}>
@@ -43,11 +74,15 @@
           </div>
         </a>
         {% for person in contributors %}
-        <a class="contributor-card card text-decoration-none {% if selected_contributor == person.name %}border-primary selected{% endif %}"
-           href="{{ person.href }}" {% if selected_contributor == person.name %}aria-current="true"{% endif %}>
+        <div class="contributor-card card {% if selected_contributor == person.name %}border-primary selected{% endif %}">
           <div class="card-body">
             <div class="d-flex justify-content-between gap-2">
-              <h3 class="h6 text-truncate" title="{{ person.name }}">{{ person.name }}</h3>
+              <h3 class="h6 text-truncate" title="{{ person.name }}">
+                <a class="text-decoration-none" href="{{ person.href }}"
+                   {% if selected_contributor == person.name %}aria-current="true"{% endif %}>
+                  {{ person.name }}
+                </a>
+              </h3>
               <span class="freshness-dot {{ person.freshness }}" aria-label="資料狀態：{{ person.freshness }}"></span>
             </div>
             <p class="mb-2"><strong>{{ person.total_count }}</strong> 筆</p>
@@ -56,8 +91,20 @@
               已刪除 {{ person.deleted_count }} · 僅評分 {{ person.rating_only_count }}<br>
               巡查 {{ person.last_success_text }}
             </div>
+            <div class="mt-3 d-flex justify-content-between align-items-center gap-2">
+              <a class="btn btn-outline-primary btn-sm" href="{{ person.href }}">查看</a>
+              <button class="btn btn-outline-danger btn-sm remove-target"
+                      type="submit" form="target-management"
+                      formaction="/targets/remove"
+                      formnovalidate
+                      name="target_url" value="{{ person.url }}"
+                      data-target-name="{{ person.name }}"
+                      {% if not management_enabled %}disabled{% endif %}>
+                移除
+              </button>
+            </div>
           </div>
-        </a>
+        </div>
         {% endfor %}
       </div>
       {% if contributors|selectattr('freshness', 'equalto', 'critical')|list %}

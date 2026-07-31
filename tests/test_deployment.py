@@ -14,6 +14,7 @@ def test_web_container_is_read_only_and_publishes_port_8000():
     assert web["ports"] == ["0.0.0.0:8000:8000"]
     assert "./state/web:/app/state/web:ro" in web["volumes"]
     assert "./state/data/images:/app/state/data/images:ro" in web["volumes"]
+    assert "./config:/app/config:rw" in web["volumes"]
     assert "./state:/app/state:ro" not in web["volumes"]
     assert web["cap_drop"] == ["ALL"]
     assert "--no-access-log" in web["command"]

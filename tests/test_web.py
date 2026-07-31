@@ -135,11 +135,17 @@ def test_dashboard_filters_and_noindex(tmp_path, monkeypatch):
     assert "2026-07-30 09:23:45" not in response.text
     assert response.headers["x-robots-tag"] == "noindex, nofollow"
     assert "google-analytics" not in response.text.lower()
-    assert all(
-        not (set(route.methods or set()) - {"GET", "HEAD"})
+    mutable_routes = {
+        (route.path, method)
         for route in client.app.routes
         if hasattr(route, "methods")
-    )
+        for method in (route.methods or set())
+        if method not in {"GET", "HEAD"}
+    }
+    assert mutable_routes == {
+        ("/targets/add", "POST"),
+        ("/targets/remove", "POST"),
+    }
     assert client.get("/openapi.json").status_code == 404
 
     deleted = client.get("/?status=deleted")
@@ -268,3 +274,66 @@ def test_dashboard_uncertainty_and_high_confidence_interval(tmp_path, monkeypatc
 
     estimated_evidence = client.get("/reviews/2/evidence")
     assert "高可信日期確認區間" not in estimated_evidence.text
+
+
+def test_dashboard_can_add_and_remove_validated_target(tmp_path, monkeypatch):
+    database_path, image_root, _digest = _seed(tmp_path)
+    config = tmp_path / "config" / "targets.yaml"
+    config.parent.mkdir()
+    config.write_text(
+        """timezone: Asia/Taipei
+targets:
+  - name: 測試人物
+    url: https://www.google.com/maps/contrib/1/reviews
+    enabled: true
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MAPS_MONITOR_TARGETS_CONFIG", str(config))
+    monkeypatch.setenv("DASHBOARD_ADMIN_PASSWORD", "correct horse")
+    client = _client(monkeypatch, database_path, image_root)
+
+    async def valid_target(_value):
+        return "https://www.google.com/maps/contrib/2/reviews", "新增人物"
+
+    monkeypatch.setattr("maps_monitor.web.validate_contributor_url", valid_target)
+
+    dashboard = client.get("/")
+    assert "驗證並新增" in dashboard.text
+    assert 'formaction="/targets/remove"' in dashboard.text
+
+    unauthorized = client.post(
+        "/targets/add",
+        data={
+            "target_url": "https://www.google.com/maps/contrib/2/reviews",
+            "admin_password": "wrong",
+        },
+        follow_redirects=False,
+    )
+    assert unauthorized.headers["location"] == "/?manage=unauthorized"
+    assert "新增人物" not in config.read_text(encoding="utf-8")
+
+    added = client.post(
+        "/targets/add",
+        data={
+            "target_url": "https://www.google.com/maps/contrib/2/reviews",
+            "admin_password": "correct horse",
+        },
+        follow_redirects=False,
+    )
+    assert added.status_code == 303
+    assert added.headers["location"] == "/?manage=added"
+    assert "新增人物" in config.read_text(encoding="utf-8")
+
+    removed = client.post(
+        "/targets/remove",
+        data={
+            "target_url": "https://www.google.com/maps/contrib/1/reviews",
+            "admin_password": "correct horse",
+        },
+        follow_redirects=False,
+    )
+    assert removed.headers["location"] == "/?manage=removed"
+    updated = config.read_text(encoding="utf-8")
+    assert "contrib/1/reviews" not in updated
+    assert "contrib/2/reviews" in updated
