@@ -210,3 +210,36 @@ def test_health_and_safe_unavailable_page(tmp_path, monkeypatch):
     corrupt_client = _client(monkeypatch, corrupt, image_root)
     assert corrupt_client.get("/healthz").status_code == 503
     assert corrupt_client.get("/").headers["cache-control"] == "no-store"
+
+
+def test_dashboard_uncertainty_and_high_confidence_interval(tmp_path, monkeypatch):
+    database_path, image_root, _digest = _seed(tmp_path)
+    database = Database(database_path)
+    database.connection.execute(
+        """UPDATE reviews
+        SET publish_estimate='2025-07-30T00:00:00+00:00',
+            publish_earliest='2025-07-20T00:00:00+00:00',
+            publish_latest='2025-08-09T00:00:00+00:00'
+        WHERE id=2"""
+    )
+    database.connection.execute(
+        """UPDATE reviews
+        SET publish_estimate='2026-07-28T03:00:00+00:00',
+            publish_earliest='2026-07-28T02:30:00+00:00',
+            publish_latest='2026-07-28T03:30:00+00:00'
+        WHERE id=1"""
+    )
+    database.connection.commit()
+    database.close()
+
+    client = _client(monkeypatch, database_path, image_root)
+    dashboard = client.get("/")
+    assert "發表日期：約 2025-07-30（± 10 日）" in dashboard.text
+    assert "發表日期：2026-07-28（±" not in dashboard.text
+
+    evidence = client.get("/reviews/1/evidence")
+    assert "高可信日期確認區間" in evidence.text
+    assert "2026-07-28 10:30:00 ～ 2026-07-28 11:30:00" in evidence.text
+
+    estimated_evidence = client.get("/reviews/2/evidence")
+    assert "高可信日期確認區間" not in estimated_evidence.text

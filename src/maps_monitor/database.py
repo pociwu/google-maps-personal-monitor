@@ -705,6 +705,14 @@ class Database:
         )
         self.connection.commit()
 
+    def mark_event_suppressed(self, event_id: int, reason: str) -> None:
+        self.connection.execute(
+            """UPDATE events SET delivery_state='suppressed',last_error=?
+            WHERE id=? AND delivery_state='pending'""",
+            (reason[:2000], event_id),
+        )
+        self.connection.commit()
+
     def mark_event_explicit_failure(self, event_id: int, error: str, retry: bool) -> None:
         state = "pending" if retry else "failed"
         self.connection.execute(

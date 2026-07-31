@@ -6,6 +6,10 @@
     <dd class="col-sm-8">{{ review.publish_estimate_text }}</dd>
     <dt class="col-sm-4">可能區間</dt>
     <dd class="col-sm-8">{{ review.publish_earliest_text }} ～ {{ review.publish_latest_text }}</dd>
+    {% if review.confirmation_interval_text %}
+    <dt class="col-sm-4">高可信日期確認區間</dt>
+    <dd class="col-sm-8">{{ review.confirmation_interval_text }}</dd>
+    {% endif %}
     <dt class="col-sm-4">可信度／精度</dt>
     <dd class="col-sm-8">{{ review.confidence }}／{{ review.precision }}</dd>
     <dt class="col-sm-4">推算依據</dt>

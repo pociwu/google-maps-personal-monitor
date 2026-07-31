@@ -31,6 +31,8 @@ EVENT_LABELS = {
     "test": "✅ Telegram 測試成功",
 }
 
+CONFIRMED_DATE_CONFIDENCE = {"confirmed_time", "confirmed_date"}
+
 
 def format_event(event_type: str, payload: dict[str, Any]) -> str:
     lines = [EVENT_LABELS.get(event_type, event_type)]
@@ -106,12 +108,22 @@ class TelegramSender:
     async def send_pending(self) -> tuple[int, int]:
         sent = 0
         failed = 0
-        events = self.db.get_pending_events()
+        events = []
+        for event in self.db.get_pending_events():
+            payload = json.loads(event["payload_json"])
+            if (
+                event["event_type"] == "date_changed"
+                and payload.get("confidence") not in CONFIRMED_DATE_CONFIDENCE
+            ):
+                self.db.mark_event_suppressed(
+                    event["id"], "日期更新尚未達高可信，不發送 Telegram"
+                )
+                continue
+            events.append((event, payload))
         async with httpx.AsyncClient(timeout=30.0) as client:
-            for index, event in enumerate(events):
+            for index, (event, payload) in enumerate(events):
                 if index:
                     await asyncio.sleep(random.randint(*self.delay))
-                payload = json.loads(event["payload_json"])
                 self.db.mark_event_attempted(event["id"])
                 try:
                     response = await client.post(

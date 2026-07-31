@@ -57,6 +57,8 @@ def _first_seen_window(review: sqlite3.Row | None) -> tuple[datetime, datetime] 
 def _date_event_needed(old: sqlite3.Row | None, assessment: DateAssessment, timezone: str) -> bool:
     if not old:
         return False
+    if assessment.confidence not in CONFIRMED:
+        return False
     if old["basis"] in {"legacy", "legacy_midday"}:
         return False
     old_date = old["edit_date"] if assessment.time_subject == "last_edit" else old["publish_date"]

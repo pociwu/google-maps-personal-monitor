@@ -35,3 +35,21 @@ def test_ambiguous_telegram_result_is_never_retried(tmp_path, monkeypatch):
     assert row["attempts"] == 1
     assert AmbiguousClient.calls == 1
     db.close()
+
+
+def test_low_confidence_date_event_is_suppressed(tmp_path):
+    db = Database(tmp_path / "monitor.sqlite3")
+    db.create_event(
+        "date_changed",
+        {"publish_date": "2026-07-30", "confidence": "high_estimate"},
+    )
+    sender = TelegramSender(db, "unused-token", "unused-chat", (0, 0))
+
+    assert asyncio.run(sender.send_pending()) == (0, 0)
+    row = db.connection.execute(
+        "SELECT delivery_state,attempts,last_error FROM events"
+    ).fetchone()
+    assert row["delivery_state"] == "suppressed"
+    assert row["attempts"] == 0
+    assert "尚未達高可信" in row["last_error"]
+    db.close()

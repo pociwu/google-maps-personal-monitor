@@ -123,11 +123,47 @@ def _freshness(value: str | None) -> str:
     return "fresh"
 
 
-def _display_date(value: str | None, confidence: str | None, label: str) -> str:
+def _uncertainty_days(
+    estimate: str | None,
+    earliest: str | None,
+    latest: str | None,
+) -> int | None:
+    if not earliest or not latest:
+        return None
+    try:
+        lower = datetime.fromisoformat(earliest)
+        upper = datetime.fromisoformat(latest)
+        if lower.tzinfo is None:
+            lower = lower.replace(tzinfo=UTC)
+        if upper.tzinfo is None:
+            upper = upper.replace(tzinfo=UTC)
+        midpoint = datetime.fromisoformat(estimate) if estimate else lower + (upper - lower) / 2
+        if midpoint.tzinfo is None:
+            midpoint = midpoint.replace(tzinfo=UTC)
+        seconds = max(
+            abs((midpoint - lower).total_seconds()),
+            abs((upper - midpoint).total_seconds()),
+        )
+        return math.ceil(seconds / 86400)
+    except ValueError:
+        return None
+
+
+def _display_date(
+    value: str | None,
+    confidence: str | None,
+    label: str,
+    uncertainty_days: int | None = None,
+) -> str:
     if not value:
         return f"{label}：尚未確認"
     prefix = "" if confidence in CONFIRMED_CONFIDENCE else "約 "
-    return f"{label}：{prefix}{value}"
+    uncertainty = (
+        f"（± {uncertainty_days} 日）"
+        if confidence not in CONFIRMED_CONFIDENCE and uncertainty_days is not None
+        else ""
+    )
+    return f"{label}：{prefix}{value}{uncertainty}"
 
 
 def _like(value: str) -> str:
@@ -214,7 +250,8 @@ def _dashboard_data(request: Request) -> dict:
             dict(row)
             for row in connection.execute(
                 f"""SELECT r.id,t.name AS contributor_name,r.place_name,r.rating,r.body,
-                r.publish_date,r.confidence,r.edit_date,r.edit_confidence,r.status,
+                r.publish_date,r.publish_estimate,r.publish_earliest,r.publish_latest,
+                r.confidence,r.edit_date,r.edit_confidence,r.status,
                 r.modified_at,r.last_seen_at,r.relative_time,r.review_url,r.place_url
                 FROM reviews r JOIN targets t ON t.id=r.target_id
                 WHERE {where_sql}
@@ -262,8 +299,16 @@ def _dashboard_data(request: Request) -> dict:
         review["rating_only"] = not (review["body"] or "").strip()
         review["relative_time"] = normalize_relative_label(review["relative_time"])
         review["modified"] = bool(review["modified_at"])
+        uncertainty_days = _uncertainty_days(
+            review["publish_estimate"],
+            review["publish_earliest"],
+            review["publish_latest"],
+        )
         review["publish_text"] = _display_date(
-            review["publish_date"], review["confidence"], "發表日期"
+            review["publish_date"],
+            review["confidence"],
+            "發表日期",
+            uncertainty_days,
         )
         review["edit_text"] = _display_date(
             review["edit_date"], review["edit_confidence"], "最後修改"
@@ -343,6 +388,14 @@ def _evidence_data(review_id: int) -> dict | None:
     review["publish_latest_text"] = (
         _local_datetime(review["publish_latest"], seconds=True)
         if review["publish_latest"] else "—"
+    )
+    review["high_confidence"] = review["confidence"] in CONFIRMED_CONFIDENCE
+    review["confirmation_interval_text"] = (
+        f"{review['publish_earliest_text']} ～ {review['publish_latest_text']}"
+        if review["high_confidence"]
+        and review["publish_earliest"]
+        and review["publish_latest"]
+        else None
     )
     review["edit_text"] = _display_date(
         review["edit_date"], review["edit_confidence"], "最後修改"
