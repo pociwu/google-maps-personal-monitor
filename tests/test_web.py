@@ -237,6 +237,31 @@ def test_dashboard_uncertainty_and_high_confidence_interval(tmp_path, monkeypatc
     assert "發表日期：約 2025-07-30（± 10 日）" in dashboard.text
     assert "發表日期：2026-07-28（±" not in dashboard.text
 
+    database = Database(database_path)
+    database.connection.execute(
+        """UPDATE reviews
+        SET publish_estimate='2025-07-30T08:36:00+00:00',
+            publish_earliest='2025-07-30T06:21:00+00:00',
+            publish_latest='2025-07-30T10:51:00+00:00'
+        WHERE id=2"""
+    )
+    database.connection.commit()
+    database.close()
+    hourly_dashboard = client.get("/")
+    assert "發表日期：約 2025-07-30 16:36（± 3 小時）" in hourly_dashboard.text
+
+    database = Database(database_path)
+    database.connection.execute(
+        """UPDATE reviews
+        SET publish_earliest='2025-07-30T08:01:00+00:00',
+            publish_latest='2025-07-30T09:11:00+00:00'
+        WHERE id=2"""
+    )
+    database.connection.commit()
+    database.close()
+    minute_dashboard = client.get("/")
+    assert "發表日期：約 2025-07-30 16:36（± 35 分）" in minute_dashboard.text
+
     evidence = client.get("/reviews/1/evidence")
     assert "高可信日期確認區間" in evidence.text
     assert "2026-07-28 10:30:00 ～ 2026-07-28 11:30:00" in evidence.text

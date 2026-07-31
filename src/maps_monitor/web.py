@@ -123,11 +123,11 @@ def _freshness(value: str | None) -> str:
     return "fresh"
 
 
-def _uncertainty_days(
+def _uncertainty_seconds(
     estimate: str | None,
     earliest: str | None,
     latest: str | None,
-) -> int | None:
+) -> float | None:
     if not earliest or not latest:
         return None
     try:
@@ -140,27 +140,36 @@ def _uncertainty_days(
         midpoint = datetime.fromisoformat(estimate) if estimate else lower + (upper - lower) / 2
         if midpoint.tzinfo is None:
             midpoint = midpoint.replace(tzinfo=UTC)
-        seconds = max(
+        return max(
             abs((midpoint - lower).total_seconds()),
             abs((upper - midpoint).total_seconds()),
         )
-        return math.ceil(seconds / 86400)
     except ValueError:
         return None
+
+
+def _uncertainty_text(seconds: float | None) -> str | None:
+    if seconds is None:
+        return None
+    if seconds < 3600:
+        return f"± {max(1, math.ceil(seconds / 60))} 分"
+    if seconds < 86400:
+        return f"± {math.ceil(seconds / 3600)} 小時"
+    return f"± {math.ceil(seconds / 86400)} 日"
 
 
 def _display_date(
     value: str | None,
     confidence: str | None,
     label: str,
-    uncertainty_days: int | None = None,
+    uncertainty_text: str | None = None,
 ) -> str:
     if not value:
         return f"{label}：尚未確認"
     prefix = "" if confidence in CONFIRMED_CONFIDENCE else "約 "
     uncertainty = (
-        f"（± {uncertainty_days} 日）"
-        if confidence not in CONFIRMED_CONFIDENCE and uncertainty_days is not None
+        f"（{uncertainty_text}）"
+        if confidence not in CONFIRMED_CONFIDENCE and uncertainty_text
         else ""
     )
     return f"{label}：{prefix}{value}{uncertainty}"
@@ -299,16 +308,24 @@ def _dashboard_data(request: Request) -> dict:
         review["rating_only"] = not (review["body"] or "").strip()
         review["relative_time"] = normalize_relative_label(review["relative_time"])
         review["modified"] = bool(review["modified_at"])
-        uncertainty_days = _uncertainty_days(
+        uncertainty_seconds = _uncertainty_seconds(
             review["publish_estimate"],
             review["publish_earliest"],
             review["publish_latest"],
         )
+        publish_value = review["publish_date"]
+        if (
+            review["confidence"] not in CONFIRMED_CONFIDENCE
+            and uncertainty_seconds is not None
+            and uncertainty_seconds < 86400
+            and review["publish_estimate"]
+        ):
+            publish_value = _local_datetime(review["publish_estimate"])
         review["publish_text"] = _display_date(
-            review["publish_date"],
+            publish_value,
             review["confidence"],
             "發表日期",
-            uncertainty_days,
+            _uncertainty_text(uncertainty_seconds),
         )
         review["edit_text"] = _display_date(
             review["edit_date"], review["edit_confidence"], "最後修改"
