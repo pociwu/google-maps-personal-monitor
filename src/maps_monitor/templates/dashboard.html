@@ -181,6 +181,12 @@
             {% endif %}
             <a class="btn btn-outline-secondary btn-sm mt-3"
                href="{{ review.evidence_url }}">查看日期推算證據</a>
+            {% if review.version_count > 1 %}
+            <a class="btn btn-outline-warning btn-sm mt-3"
+               href="/reviews/{{ review.id }}/history">
+              查看修改差異（{{ review.version_count }} 版）
+            </a>
+            {% endif %}
             {% if review.images %}
             <div class="review-images mt-3">
               {% for image in review.images %}

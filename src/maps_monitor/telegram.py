@@ -34,6 +34,11 @@ EVENT_LABELS = {
 CONFIRMED_DATE_CONFIDENCE = {"confirmed_time", "confirmed_date"}
 
 
+def _preview(value: Any, limit: int = 900) -> str:
+    text = str(value or "（沒有文字）")
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
 def format_event(event_type: str, payload: dict[str, Any]) -> str:
     lines = [EVENT_LABELS.get(event_type, event_type)]
     if payload.get("target_name"):
@@ -42,6 +47,16 @@ def format_event(event_type: str, payload: dict[str, Any]) -> str:
         lines.append(f"店家：{payload['place_name']}")
     if payload.get("rating") is not None:
         lines.append(f"星等：{payload['rating']:g}")
+    if (
+        event_type == "modified"
+        and "previous_rating" in payload
+        and payload.get("previous_rating") != payload.get("rating")
+    ):
+        previous_rating = payload.get("previous_rating")
+        previous_label = f"{previous_rating:g}" if previous_rating is not None else "無"
+        current_rating = payload.get("rating")
+        current_label = f"{current_rating:g}" if current_rating is not None else "無"
+        lines.append(f"星等變更：{previous_label} → {current_label}")
     if payload.get("publish_date"):
         lines.append(f"推算發表日期：{payload['publish_date']}")
     if payload.get("publish_estimate"):
@@ -86,7 +101,15 @@ def format_event(event_type: str, payload: dict[str, Any]) -> str:
     if message:
         lines.append(str(message))
     text = payload.get("text")
-    if text:
+    if event_type == "modified" and "previous_text" in payload:
+        lines.extend(
+            [
+                "",
+                f"修改前：{_preview(payload.get('previous_text'))}",
+                f"修改後：{_preview(text)}",
+            ]
+        )
+    elif text:
         lines.extend(["", str(text)])
     error = payload.get("error")
     if error:

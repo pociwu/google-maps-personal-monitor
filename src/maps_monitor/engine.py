@@ -104,6 +104,35 @@ def _update_event_payload(
     )
 
 
+def _insert_review_version(
+    con: sqlite3.Connection,
+    review_id: int,
+    scraped: ScrapedReview,
+    content_hash: str,
+    captured_at: str,
+    source: str,
+) -> None:
+    con.execute(
+        """INSERT INTO review_versions
+        (review_id,version_number,captured_at,content_hash,place_name,place_url,
+         rating,body,relative_time,source)
+        SELECT ?,COALESCE(MAX(version_number),0)+1,?,?,?,?,?,?,?,?
+        FROM review_versions WHERE review_id=?""",
+        (
+            review_id,
+            captured_at,
+            content_hash,
+            scraped.place_name,
+            scraped.place_url,
+            scraped.rating,
+            scraped.text,
+            scraped.relative_time,
+            source,
+            review_id,
+        ),
+    )
+
+
 class MonitorEngine:
     def __init__(self, settings: Settings, db: Database):
         self.settings = settings
@@ -210,6 +239,9 @@ class MonitorEngine:
                         ),
                     )
                     review_id = int(cursor.lastrowid)
+                    _insert_review_version(
+                        con, review_id, scraped, new_hash, now_iso, "initial"
+                    )
                     event_id = None
                     event_type = "new" if baseline else None
                     previous_last_seen = None
@@ -230,6 +262,7 @@ class MonitorEngine:
                     event_type = None
                     event_id = None
                     edit_date = existing["edit_date"]
+                    content_changed = existing["content_hash"] != new_hash
                     if existing["status"] == "deleted":
                         event_type = "restored"
                     elif (
@@ -251,6 +284,19 @@ class MonitorEngine:
                         existing, None, _delivery_state(target, now, "date_changed"),
                     )
                     edit_date_update = None if assessment.time_subject == "last_edit" else edit_date
+                    if content_changed:
+                        _insert_review_version(
+                            con,
+                            review_id,
+                            scraped,
+                            new_hash,
+                            now_iso,
+                            (
+                                event_type
+                                if event_type in {"modified", "restored"}
+                                else "content_upgrade"
+                            ),
+                        )
                     con.execute(
                         """UPDATE reviews SET google_review_id=?,review_url=COALESCE(?,review_url),
                         place_id=?,place_name=?,place_url=?,rating=?,body=?,
@@ -265,13 +311,19 @@ class MonitorEngine:
                         ),
                     )
                     if event_type and baseline:
+                        payload = _event_payload(target, scraped, event_type) | {
+                            "publish_date": assessment.estimate_date(self.settings.timezone),
+                            "edit_date": edit_date,
+                        }
+                        if event_type == "modified" and content_changed:
+                            payload |= {
+                                "previous_text": existing["body"],
+                                "previous_rating": existing["rating"],
+                                "previous_place_name": existing["place_name"],
+                            }
                         event_id = _insert_event(
                             con, event_type, target["id"], review_id,
-                            _event_payload(target, scraped, event_type)
-                            | {
-                                "publish_date": assessment.estimate_date(self.settings.timezone),
-                                "edit_date": edit_date,
-                            },
+                            payload,
                             _delivery_state(target, now, event_type),
                         )
                 review_images.append(

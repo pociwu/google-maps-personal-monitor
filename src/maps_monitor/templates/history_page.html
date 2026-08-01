@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-Hant" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>評論修改差異 · Google Maps 個人評論監控</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB"
+        crossorigin="anonymous">
+  <link rel="stylesheet" href="/static/dashboard.css">
+  <script src="/static/theme.js"></script>
+</head>
+<body>
+  <header class="border-bottom bg-body sticky-top">
+    <div class="container py-3">
+      <h1 class="h4 mb-1">評論修改差異</h1>
+      <p class="text-body-secondary mb-0 small">
+        {{ review.contributor_name }} · {{ review.place_name }} · 共 {{ version_count }} 版 · v{{ app_version }}
+      </p>
+    </div>
+  </header>
+  <main class="container py-4">
+    <div class="d-flex flex-wrap gap-2 mb-3">
+      <a class="btn btn-outline-secondary btn-sm" href="/">返回評論首頁</a>
+      {% if review.link_url %}
+      <a class="btn btn-outline-primary btn-sm" href="{{ review.link_url }}"
+         target="_blank" rel="noopener noreferrer">開啟 Google Maps</a>
+      {% endif %}
+    </div>
+    {% if changes %}
+    <div class="vstack gap-4">
+      {% for change in changes %}
+      <article class="card">
+        <div class="card-header d-flex flex-wrap justify-content-between gap-2">
+          <strong>第 {{ change.from_version }} 版 → 第 {{ change.to_version }} 版</strong>
+          <span class="text-body-secondary">{{ change.captured_text }}</span>
+        </div>
+        <div class="card-body">
+          {% if change.rating_changed or change.place_changed %}
+          <dl class="row small mb-3">
+            {% if change.rating_changed %}
+            <dt class="col-sm-3">星等</dt>
+            <dd class="col-sm-9">{{ change.old.rating or '無' }} → {{ change.new.rating or '無' }}</dd>
+            {% endif %}
+            {% if change.place_changed %}
+            <dt class="col-sm-3">店家名稱</dt>
+            <dd class="col-sm-9">{{ change.old.place_name }} → {{ change.new.place_name }}</dd>
+            {% endif %}
+          </dl>
+          {% endif %}
+          {% if change.text_changed %}
+          <div class="row g-3">
+            <section class="col-12 col-lg-6 diff-old" aria-label="修改前">
+              <h2 class="h6 text-danger-emphasis">修改前</h2>
+              <div class="diff-content border rounded-3 p-3">{% for segment in change.old_segments %}<span{% if segment.changed %} class="diff-changed"{% endif %}>{{ segment.text }}</span>{% endfor %}</div>
+            </section>
+            <section class="col-12 col-lg-6 diff-new" aria-label="修改後">
+              <h2 class="h6 text-success-emphasis">修改後</h2>
+              <div class="diff-content border rounded-3 p-3">{% for segment in change.new_segments %}<span{% if segment.changed %} class="diff-changed"{% endif %}>{{ segment.text }}</span>{% endfor %}</div>
+            </section>
+          </div>
+          {% elif not change.rating_changed and not change.place_changed %}
+          <p class="text-body-secondary mb-0">此版本只有其他欄位變化。</p>
+          {% endif %}
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="alert alert-secondary">目前只有一個版本，尚無可比較的修改紀錄。</div>
+    {% endif %}
+  </main>
+</body>
+</html>

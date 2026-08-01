@@ -5,7 +5,7 @@ PROJECT_DIR="${MAPS_MONITOR_DIR:-/opt/maps-monitor}"
 VERSION="${1:-}"
 
 if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "用法：sudo ./deploy/update.sh v0.3.9" >&2
+  echo "用法：sudo ./deploy/update.sh v0.4.0" >&2
   exit 2
 fi
 if [[ "$(id -u)" -ne 0 ]]; then

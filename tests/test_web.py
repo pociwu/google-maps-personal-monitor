@@ -96,6 +96,22 @@ def _seed(tmp_path: Path) -> tuple[Path, Path, str]:
             2, "day", 0, "2026-07-28T03:04:05+00:00",
         ),
     )
+    database.connection.executemany(
+        """INSERT INTO review_versions
+        (review_id,version_number,captured_at,content_hash,place_name,place_url,
+         rating,body,relative_time,source)
+        VALUES(?,?,?,?,?,?,?,?,?,?)""",
+        (
+            (
+                active_id, 1, "2026-07-29T01:00:00+00:00", "old-hash",
+                "有效店家", None, 4, "原本評論內容", "3 天前", "initial",
+            ),
+            (
+                active_id, 2, "2026-07-30T01:23:45+00:00", "hash1",
+                "有效店家", None, 5, "完整評論內容", "2 天前", "modified",
+            ),
+        ),
+    )
     database.connection.commit()
     database.close()
     return database_path, image_root, digest
@@ -130,6 +146,7 @@ def test_dashboard_filters_and_noindex(tmp_path, monkeypatch):
     assert 'target="_blank"' in response.text
     assert 'rel="noopener noreferrer"' in response.text
     assert "查看日期推算證據" in response.text
+    assert "查看修改差異（2 版）" in response.text
     assert "歷史圖片（1）" in response.text
     assert re.search(r"版本 v(?:\d+\.\d+\.\d+|dev)", response.text)
     assert "2026-07-30 09:23:45" not in response.text
@@ -159,6 +176,16 @@ def test_dashboard_filters_and_noindex(tmp_path, monkeypatch):
     assert "2026-07-28 11:04:05" in evidence.text
     assert "2 天" in evidence.text
     assert client.get("/reviews/999/evidence").status_code == 404
+
+    history = client.get("/reviews/1/history")
+    assert history.status_code == 200
+    assert "評論修改差異" in history.text
+    assert "第 1 版 → 第 2 版" in history.text
+    assert "原本" in history.text
+    assert "完整" in history.text
+    assert "評論內容" in history.text
+    assert "diff-changed" in history.text
+    assert client.get("/reviews/999/history").status_code == 404
 
 
 def test_evidence_is_a_standalone_page_without_javascript(tmp_path, monkeypatch):

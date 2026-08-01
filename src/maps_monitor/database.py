@@ -84,6 +84,22 @@ CREATE TABLE IF NOT EXISTS reviews (
     deleted_at TEXT,
     UNIQUE(target_id, review_key)
 );
+CREATE TABLE IF NOT EXISTS review_versions (
+    id INTEGER PRIMARY KEY,
+    review_id INTEGER NOT NULL REFERENCES reviews(id),
+    version_number INTEGER NOT NULL,
+    captured_at TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    place_name TEXT NOT NULL,
+    place_url TEXT,
+    rating REAL,
+    body TEXT NOT NULL,
+    relative_time TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'crawl',
+    UNIQUE(review_id, version_number)
+);
+CREATE INDEX IF NOT EXISTS idx_review_versions_review
+ON review_versions(review_id, version_number);
 CREATE TABLE IF NOT EXISTS observations (
     id INTEGER PRIMARY KEY,
     review_id INTEGER NOT NULL REFERENCES reviews(id),
@@ -242,7 +258,8 @@ class Database:
             ).fetchall()
         }
         migration_needed = bool(existing_tables) and (
-            (bool(old_review_columns) and "publish_estimate" not in old_review_columns)
+            "review_versions" not in existing_tables
+            or (bool(old_review_columns) and "publish_estimate" not in old_review_columns)
             or (bool(old_review_columns) and "review_url" not in old_review_columns)
             or (bool(old_image_columns) and "thumbnail_path" not in old_image_columns)
             or (bool(old_image_columns) and "is_current" not in old_image_columns)
@@ -300,9 +317,10 @@ class Database:
                     (unit, now),
                 )
             self._backfill_observation_parsing()
+            versioned = self._backfill_review_versions(old_review_columns)
             self.connection.execute(
-                "INSERT INTO meta(key,value) VALUES('schema_version','6') "
-                "ON CONFLICT(key) DO UPDATE SET value='6'"
+                "INSERT INTO meta(key,value) VALUES('schema_version','7') "
+                "ON CONFLICT(key) DO UPDATE SET value='7'"
             )
             self.connection.commit()
             if migration_needed:
@@ -329,6 +347,7 @@ class Database:
                     "評論內容雜湊遷移完成：重建 %d 則，圖片網址數量不再觸發修改",
                     rehashed,
                 )
+                logging.info("評論版本遷移完成：建立 %d 筆目前版本", versioned)
         except Exception:
             self.connection.rollback()
             self.connection.close()
@@ -539,7 +558,7 @@ class Database:
     def _backup_before_migration(self) -> Path:
         backup_dir = self.path.parent.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
-        destination = backup_dir / f"pre-schema-v6-{datetime.now().strftime('%Y%m%d-%H%M%S')}.sqlite3"
+        destination = backup_dir / f"pre-schema-v7-{datetime.now().strftime('%Y%m%d-%H%M%S')}.sqlite3"
         target = sqlite3.connect(destination)
         try:
             self.connection.backup(target)
@@ -569,6 +588,24 @@ class Database:
                     WHERE id=?""",
                     (parsed.count, parsed.unit, int(parsed.is_edit), row["id"]),
                 )
+
+    def _backfill_review_versions(self, review_columns: set[str]) -> int:
+        required = {
+            "id", "content_hash", "place_name", "place_url", "rating", "body",
+            "relative_time", "first_seen_at", "last_seen_at",
+        }
+        if not required.issubset(review_columns):
+            return 0
+        before = self.connection.total_changes
+        self.connection.execute(
+            """INSERT OR IGNORE INTO review_versions
+            (review_id,version_number,captured_at,content_hash,place_name,place_url,
+             rating,body,relative_time,source)
+            SELECT id,1,COALESCE(last_seen_at,first_seen_at),content_hash,place_name,
+                   place_url,rating,body,relative_time,'migration'
+            FROM reviews"""
+        )
+        return self.connection.total_changes - before
 
     def close(self) -> None:
         self.connection.close()

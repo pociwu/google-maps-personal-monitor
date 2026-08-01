@@ -4,6 +4,7 @@ import math
 import os
 import re
 import sqlite3
+from difflib import SequenceMatcher
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
@@ -287,7 +288,9 @@ def _dashboard_data(request: Request) -> dict:
                 f"""SELECT r.id,t.name AS contributor_name,r.place_name,r.rating,r.body,
                 r.publish_date,r.publish_estimate,r.publish_earliest,r.publish_latest,
                 r.confidence,r.edit_date,r.edit_confidence,r.status,
-                r.modified_at,r.last_seen_at,r.relative_time,r.review_url,r.place_url
+                r.modified_at,r.last_seen_at,r.relative_time,r.review_url,r.place_url,
+                (SELECT COUNT(*) FROM review_versions rv WHERE rv.review_id=r.id)
+                    AS version_count
                 FROM reviews r JOIN targets t ON t.id=r.target_id
                 WHERE {where_sql}
                 ORDER BY
@@ -481,6 +484,71 @@ def _evidence_data(review_id: int) -> dict | None:
     }
 
 
+def _diff_segments(old: str, new: str) -> tuple[list[dict], list[dict]]:
+    old_segments: list[dict] = []
+    new_segments: list[dict] = []
+    for operation, old_start, old_end, new_start, new_end in SequenceMatcher(
+        None, old, new, autojunk=False
+    ).get_opcodes():
+        old_text = old[old_start:old_end]
+        new_text = new[new_start:new_end]
+        if operation in {"equal", "delete", "replace"} and old_text:
+            old_segments.append(
+                {"text": old_text, "changed": operation != "equal"}
+            )
+        if operation in {"equal", "insert", "replace"} and new_text:
+            new_segments.append(
+                {"text": new_text, "changed": operation != "equal"}
+            )
+    return old_segments, new_segments
+
+
+def _history_data(review_id: int) -> dict | None:
+    with _read_connection() as connection:
+        review_row = connection.execute(
+            """SELECT r.id,r.place_name,r.review_url,r.place_url,t.name AS contributor_name
+            FROM reviews r JOIN targets t ON t.id=r.target_id
+            WHERE r.id=? AND t.enabled=1""",
+            (review_id,),
+        ).fetchone()
+        if not review_row:
+            return None
+        versions = [
+            dict(row)
+            for row in connection.execute(
+                """SELECT version_number,captured_at,place_name,place_url,rating,body,
+                relative_time,source FROM review_versions
+                WHERE review_id=? ORDER BY version_number""",
+                (review_id,),
+            ).fetchall()
+        ]
+    changes = []
+    for previous, current in zip(versions[:-1], versions[1:], strict=True):
+        old_segments, new_segments = _diff_segments(previous["body"], current["body"])
+        changes.append(
+            {
+                "from_version": previous["version_number"],
+                "to_version": current["version_number"],
+                "captured_text": _local_datetime(current["captured_at"], seconds=True),
+                "old": previous,
+                "new": current,
+                "old_segments": old_segments,
+                "new_segments": new_segments,
+                "text_changed": previous["body"] != current["body"],
+                "rating_changed": previous["rating"] != current["rating"],
+                "place_changed": previous["place_name"] != current["place_name"],
+            }
+        )
+    review = dict(review_row)
+    review["link_url"] = review["review_url"] or review["place_url"]
+    return {
+        "app_version": APP_VERSION,
+        "review": review,
+        "changes": list(reversed(changes)),
+        "version_count": len(versions),
+    }
+
+
 def _render(name: str, context: dict, status_code: int = 200) -> HTMLResponse:
     template = templates.get_template(name)
     return HTMLResponse(template.render(**context), status_code=status_code)
@@ -602,6 +670,16 @@ def create_app() -> FastAPI:
         if not data:
             raise HTTPException(status_code=404)
         return _render("evidence_page.html", data)
+
+    @application.get("/reviews/{review_id}/history", response_class=HTMLResponse)
+    def review_history(review_id: int):
+        try:
+            data = _history_data(review_id)
+        except sqlite3.Error:
+            return _render("unavailable.html", {}, status_code=503)
+        if not data:
+            raise HTTPException(status_code=404)
+        return _render("history_page.html", data)
 
     @application.get("/healthz")
     def health():

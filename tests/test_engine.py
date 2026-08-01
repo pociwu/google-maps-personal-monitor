@@ -61,9 +61,24 @@ def test_lifecycle_baseline_modify_delete_restore(tmp_path):
     target = db.connection.execute("SELECT * FROM targets WHERE id=?", (target["id"],)).fetchone()
     asyncio.run(engine.process_success(target, CrawlResult([review("修改後")], True, 1)))
     assert db.connection.execute("SELECT COUNT(*) FROM events WHERE event_type='modified'").fetchone()[0] == 1
+    versions = db.connection.execute(
+        "SELECT version_number,body FROM review_versions ORDER BY version_number"
+    ).fetchall()
+    assert [(row["version_number"], row["body"]) for row in versions] == [
+        (1, "原文"),
+        (2, "修改後"),
+    ]
+    modified_payload = json.loads(
+        db.connection.execute(
+            "SELECT payload_json FROM events WHERE event_type='modified'"
+        ).fetchone()[0]
+    )
+    assert modified_payload["previous_text"] == "原文"
+    assert modified_payload["text"] == "修改後"
     target = db.connection.execute("SELECT * FROM targets WHERE id=?", (target["id"],)).fetchone()
     asyncio.run(engine.process_success(target, CrawlResult([review("修改後")], True, 1)))
     assert db.connection.execute("SELECT COUNT(*) FROM events WHERE event_type='modified'").fetchone()[0] == 1
+    assert db.connection.execute("SELECT COUNT(*) FROM review_versions").fetchone()[0] == 2
 
     for _ in range(3):
         target = db.connection.execute("SELECT * FROM targets WHERE id=?", (target["id"],)).fetchone()
