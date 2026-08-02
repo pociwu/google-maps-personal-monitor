@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -31,6 +32,8 @@ from .target_admin import (
     TargetAdminError,
     add_target,
     remove_target,
+    reorder_targets,
+    target_urls_in_order,
     validate_contributor_url,
 )
 
@@ -65,6 +68,7 @@ PARSED_UNIT_LABELS = {
 MANAGEMENT_MESSAGES = {
     "added": ("success", "網址驗證成功；已加入監控清單，下一輪巡查後顯示卡片。"),
     "removed": ("success", "已移出監控清單；下一輪巡查後卡片會消失，歷史資料仍保留。"),
+    "reordered": ("success", "貢獻者卡片順序已儲存。"),
     "invalid": ("danger", "網址格式錯誤，請輸入 Google Maps 公開貢獻者評論網址。"),
     "unavailable": ("danger", "Google Maps 網址目前無法讀取或已導向其他頁面。"),
     "duplicate": ("warning", "這個貢獻者網址已在監控清單中。"),
@@ -253,6 +257,20 @@ def _dashboard_data(request: Request) -> dict:
             WHERE t.enabled=1
             GROUP BY t.id,t.name,t.url,t.last_success_at ORDER BY t.name"""
         ).fetchall()
+        try:
+            configured_order = {
+                url: index
+                for index, url in enumerate(target_urls_in_order(TARGETS_CONFIG_PATH))
+            }
+        except TargetAdminError:
+            configured_order = {}
+        contributor_rows = sorted(
+            contributor_rows,
+            key=lambda row: (
+                configured_order.get(row["url"], len(configured_order)),
+                row["name"],
+            ),
+        )
         contributor_names = {row["name"] for row in contributor_rows}
         if contributor and contributor not in contributor_names:
             contributor = ""
@@ -569,6 +587,25 @@ async def _management_fields(request: Request) -> dict[str, str]:
     return {key: values[-1] for key, values in parsed.items() if values}
 
 
+async def _management_order(request: Request) -> list[str]:
+    if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
+        raise TargetAdminError("invalid")
+    body = await request.body()
+    if len(body) > 4096:
+        raise TargetAdminError("invalid")
+    try:
+        payload = json.loads(body)
+        ordered = payload["target_urls"]
+    except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise TargetAdminError("invalid") from exc
+    if (
+        not isinstance(ordered, list)
+        or not all(isinstance(value, str) and len(value) <= 1000 for value in ordered)
+    ):
+        raise TargetAdminError("invalid")
+    return ordered
+
+
 def _management_redirect(code: str) -> RedirectResponse:
     return RedirectResponse(url=f"/?{urlencode({'manage': code})}", status_code=303)
 
@@ -630,6 +667,18 @@ def create_app() -> FastAPI:
             return _management_redirect("removed")
         except TargetAdminError as exc:
             return _management_redirect(exc.code)
+
+    @application.post("/targets/reorder")
+    async def target_reorder(request: Request):
+        try:
+            ordered = await _management_order(request)
+            reorder_targets(TARGETS_CONFIG_PATH, ordered)
+            return JSONResponse({"status": "ok"})
+        except TargetAdminError as exc:
+            return JSONResponse(
+                {"status": "error", "code": exc.code},
+                status_code=400,
+            )
 
     @application.get("/media/{digest}/{kind}")
     def media(digest: str, kind: str):

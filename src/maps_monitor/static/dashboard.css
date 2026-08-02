@@ -33,6 +33,23 @@ body {
   background: color-mix(in srgb, var(--bs-body-bg) 88%, var(--dashboard-accent) 12%);
 }
 
+.reorderable-contributor.dragging {
+  opacity: .55;
+  transform: scale(.98);
+  box-shadow: var(--bs-box-shadow-lg);
+}
+
+.drag-handle {
+  cursor: grab;
+  touch-action: none;
+  line-height: 1;
+  font-size: 1.15rem;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
 .freshness-dot {
   width: .75rem;
   height: .75rem;

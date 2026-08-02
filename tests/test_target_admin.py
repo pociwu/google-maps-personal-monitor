@@ -12,6 +12,8 @@ from maps_monitor.target_admin import (
     add_target,
     canonicalize_contributor_url,
     remove_target,
+    reorder_targets,
+    target_urls_in_order,
     validate_contributor_url,
 )
 
@@ -81,6 +83,35 @@ def test_add_remove_duplicate_and_limit(tmp_path):
             "https://www.google.com/maps/contrib/11/reviews",
             "超過上限",
         )
+
+
+def test_reorders_only_the_existing_target_set(tmp_path):
+    config = _config(tmp_path, 3)
+    reordered = [
+        "https://www.google.com/maps/contrib/2/reviews",
+        "https://www.google.com/maps/contrib/0/reviews",
+        "https://www.google.com/maps/contrib/1/reviews",
+    ]
+
+    reorder_targets(config, reordered)
+
+    document = yaml.safe_load(config.read_text(encoding="utf-8"))
+    assert [item["name"] for item in document["targets"]] == [
+        "人物 2",
+        "人物 0",
+        "人物 1",
+    ]
+    assert target_urls_in_order(config) == reordered
+
+    reorder_targets(config, reordered[1:])
+    assert target_urls_in_order(config) == [reordered[1], reordered[2], reordered[0]]
+
+    for invalid in (
+        [reordered[0], reordered[0], reordered[2]],
+        [*reordered[:-1], "https://www.google.com/maps/contrib/9/reviews"],
+    ):
+        with pytest.raises(TargetAdminError, match="invalid"):
+            reorder_targets(config, invalid)
 
 
 def test_live_validation_requires_same_contributor_page_and_extracts_name(monkeypatch):

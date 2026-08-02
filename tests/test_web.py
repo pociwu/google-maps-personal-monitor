@@ -162,6 +162,7 @@ def test_dashboard_filters_and_noindex(tmp_path, monkeypatch):
     assert mutable_routes == {
         ("/targets/add", "POST"),
         ("/targets/remove", "POST"),
+        ("/targets/reorder", "POST"),
     }
     assert client.get("/openapi.json").status_code == 404
 
@@ -327,6 +328,9 @@ targets:
     dashboard = client.get("/")
     assert "驗證並新增" in dashboard.text
     assert 'formaction="/targets/remove"' in dashboard.text
+    assert 'class="drag-handle' in dashboard.text
+    assert 'href="https://www.google.com/maps/contrib/1/reviews"' in dashboard.text
+    assert "個人頁面" in dashboard.text
 
     added = client.post(
         "/targets/add",
@@ -337,6 +341,28 @@ targets:
     assert added.headers["location"] == "/?manage=added"
     assert "新增人物" in config.read_text(encoding="utf-8")
 
+    reordered = client.post(
+        "/targets/reorder",
+        json={
+            "target_urls": [
+                "https://www.google.com/maps/contrib/2/reviews",
+                "https://www.google.com/maps/contrib/1/reviews",
+            ]
+        },
+    )
+    assert reordered.status_code == 200
+    assert reordered.json() == {"status": "ok"}
+    updated_order = config.read_text(encoding="utf-8")
+    assert updated_order.index("contrib/2/reviews") < updated_order.index(
+        "contrib/1/reviews"
+    )
+
+    invalid_reorder = client.post(
+        "/targets/reorder",
+        json={"target_urls": ["https://www.google.com/maps/contrib/9/reviews"]},
+    )
+    assert invalid_reorder.status_code == 400
+
     removed = client.post(
         "/targets/remove",
         data={"target_url": "https://www.google.com/maps/contrib/1/reviews"},
@@ -346,3 +372,37 @@ targets:
     updated = config.read_text(encoding="utf-8")
     assert "contrib/1/reviews" not in updated
     assert "contrib/2/reviews" in updated
+
+
+def test_dashboard_uses_the_persisted_target_order(tmp_path, monkeypatch):
+    database_path, image_root, _digest = _seed(tmp_path)
+    database = Database(database_path)
+    database.connection.execute(
+        """INSERT INTO targets
+        (name,url,enabled,created_at,updated_at)
+        VALUES('第二人物','https://www.google.com/maps/contrib/2/reviews',1,
+        '2026-07-30T00:00:00+00:00','2026-07-30T00:00:00+00:00')"""
+    )
+    database.connection.commit()
+    database.close()
+
+    config = tmp_path / "config" / "targets.yaml"
+    config.parent.mkdir()
+    config.write_text(
+        """timezone: Asia/Taipei
+targets:
+  - name: 第二人物
+    url: https://www.google.com/maps/contrib/2/reviews
+    enabled: true
+  - name: 測試貢獻者
+    url: https://www.google.com/maps/contrib/1/reviews
+    enabled: true
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MAPS_MONITOR_TARGETS_CONFIG", str(config))
+    client = _client(monkeypatch, database_path, image_root)
+
+    dashboard = client.get("/")
+    assert dashboard.status_code == 200
+    assert dashboard.text.index("第二人物") < dashboard.text.index("測試貢獻者")

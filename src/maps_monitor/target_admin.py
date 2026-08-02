@@ -226,3 +226,50 @@ def remove_target(path: Path, value: str) -> None:
         raise TargetAdminError("not_found")
     document["targets"] = remaining
     _write_document(path, document)
+
+
+def target_urls_in_order(path: Path) -> list[str]:
+    document = _document(path)
+    ordered: list[str] = []
+    try:
+        for item in document["targets"]:
+            if bool(item.get("enabled", True)):
+                ordered.append(canonicalize_contributor_url(str(item.get("url", "")))[0])
+    except (AttributeError, TargetAdminError) as exc:
+        raise TargetAdminError("config_error") from exc
+    return ordered
+
+
+def reorder_targets(path: Path, ordered_urls: list[str]) -> None:
+    if not isinstance(ordered_urls, list) or len(ordered_urls) > 10:
+        raise TargetAdminError("invalid")
+    try:
+        canonical_order = [canonicalize_contributor_url(value)[0] for value in ordered_urls]
+    except (AttributeError, TypeError, TargetAdminError) as exc:
+        raise TargetAdminError("invalid") from exc
+    if len(canonical_order) != len(set(canonical_order)):
+        raise TargetAdminError("invalid")
+
+    document = _document(path)
+    enabled: dict[str, dict] = {}
+    enabled_order: list[str] = []
+    disabled: list[dict] = []
+    try:
+        for item in document["targets"]:
+            canonical = canonicalize_contributor_url(str(item.get("url", "")))[0]
+            if bool(item.get("enabled", True)):
+                if canonical in enabled:
+                    raise TargetAdminError("config_error")
+                enabled[canonical] = item
+                enabled_order.append(canonical)
+            else:
+                disabled.append(item)
+    except (AttributeError, TargetAdminError) as exc:
+        if isinstance(exc, TargetAdminError) and exc.code == "config_error":
+            raise
+        raise TargetAdminError("config_error") from exc
+    if not set(canonical_order).issubset(enabled):
+        raise TargetAdminError("invalid")
+    remaining = [url for url in enabled_order if url not in set(canonical_order)]
+    document["targets"] = [enabled[url] for url in canonical_order + remaining] + disabled
+    _write_document(path, document)
