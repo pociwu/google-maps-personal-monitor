@@ -96,7 +96,7 @@ http://100.x.x.x:8000/
 請自行確保一般公網沒有開放 TCP 8000。儀表板：
 
 - 以可選取卡片顯示所有貢獻者。
-- 可在首頁輸入公開貢獻者評論網址；通過格式與連線驗證後加入下一輪巡查。
+- 可在首頁輸入公開貢獻者評論網址；通過格式與連線驗證後，以唯讀瀏覽器辨識公開頁面的貢獻者名稱，再加入下一輪巡查。
 - 每張貢獻者卡片可停止監控；只移出設定清單，不刪除評論、證據或圖片。
 - 新增與移除不需要密碼；能開啟首頁的人都可以操作。
 - 支援店家／內容搜尋、狀態與星等篩選。
@@ -206,7 +206,7 @@ sudo systemctl stop maps-monitor.timer maps-monitor-web.service
 cd /opt
 stamp="$(date +%Y%m%d-%H%M%S)"
 sudo mv maps-monitor "maps-monitor.pre-git-${stamp}"
-sudo git clone --branch v0.4.0 --depth 1 \
+sudo git clone --branch v0.4.1 --depth 1 \
   https://github.com/pociwu/google-maps-personal-monitor.git maps-monitor
 sudo cp "maps-monitor.pre-git-${stamp}/.env" maps-monitor/.env
 sudo cp "maps-monitor.pre-git-${stamp}/config/targets.yaml" \
@@ -226,7 +226,7 @@ Ubuntu 只部署版本標籤，不直接跟隨 `main`：
 
 ```bash
 cd /opt/maps-monitor
-sudo ./deploy/update.sh v0.4.0
+sudo ./deploy/update.sh v0.4.1
 ```
 
 更新程式會先備份、取得指定標籤、重建映像、補建縮圖並執行 Web 健康檢查；失敗時回到部署前的程式版本。

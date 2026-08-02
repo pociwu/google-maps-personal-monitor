@@ -2,7 +2,7 @@ services:
   monitor:
     build:
       context: .
-    image: maps-contributor-monitor:0.4.0
+    image: maps-contributor-monitor:0.4.1
     platform: linux/arm64
     user: "0:0"
     init: true
@@ -24,13 +24,14 @@ services:
   web:
     build:
       context: .
-    image: maps-contributor-monitor:0.4.0
+    image: maps-contributor-monitor:0.4.1
     platform: linux/arm64
     user: "0:0"
     init: true
+    shm_size: "512mb"
     read_only: true
     tmpfs:
-      - /tmp:size=64m,mode=1777
+      - /tmp:size=512m,mode=1777
     env_file:
       - .env
     environment:

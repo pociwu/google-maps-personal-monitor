@@ -11,6 +11,8 @@ def test_web_container_is_read_only_and_publishes_port_8000():
     web = compose["services"]["web"]
 
     assert web["read_only"] is True
+    assert web["shm_size"] == "512mb"
+    assert web["tmpfs"] == ["/tmp:size=512m,mode=1777"]
     assert web["ports"] == ["0.0.0.0:8000:8000"]
     assert "./state/web:/app/state/web:ro" in web["volumes"]
     assert "./state/data/images:/app/state/data/images:ro" in web["volumes"]

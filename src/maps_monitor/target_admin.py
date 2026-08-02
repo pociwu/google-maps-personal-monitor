@@ -8,6 +8,9 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import yaml
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright
 
 
 CONTRIBUTOR_PATH = re.compile(r"^/maps/contrib/(?P<id>[0-9]+)/reviews/?$")
@@ -18,6 +21,33 @@ TITLE_PATTERNS = (
     ),
     re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL),
 )
+GOOGLE_MAPS_PRODUCT = re.compile(
+    r"^Google\s*(?:Maps|Map|地圖|地图|マップ|지도|Karten|Cartes|Mapas|Mappe|Kaarten|Haritalar)$",
+    re.IGNORECASE,
+)
+GOOGLE_MAPS_SUFFIX = re.compile(
+    r"\s*[-–—]\s*Google\s*(?:Maps|Map|地圖|地图|マップ|지도|Karten|Cartes|Mapas|Mappe|Kaarten|Haritalar).*$",
+    re.IGNORECASE,
+)
+PROFILE_NAME_SCRIPT = r"""
+() => {
+  const main = document.querySelector('main[aria-label], [role="main"][aria-label]');
+  if (!main) return null;
+  const label = (main.getAttribute('aria-label') || '').trim();
+  if (!label) return null;
+  const candidates = [];
+  for (const node of main.querySelectorAll('button')) {
+    for (const raw of [node.getAttribute('aria-label'), node.textContent]) {
+      const value = (raw || '').replace(/\s+/g, ' ').trim();
+      if (value && value.length < label.length && label.startsWith(value)) {
+        candidates.push(value);
+      }
+    }
+  }
+  candidates.sort((left, right) => right.length - left.length);
+  return {label, candidates: [...new Set(candidates)]};
+}
+"""
 
 
 class TargetAdminError(ValueError):
@@ -43,17 +73,78 @@ def canonicalize_contributor_url(value: str) -> tuple[str, str]:
     return canonical, contributor_id
 
 
-def _name_from_html(body: str, contributor_id: str) -> str:
+def _clean_name(value: str) -> str | None:
+    name = html.unescape(re.sub(r"\s+", " ", value)).strip()
+    name = GOOGLE_MAPS_SUFFIX.sub("", name).strip()
+    if not name or GOOGLE_MAPS_PRODUCT.fullmatch(name):
+        return None
+    return name[:200]
+
+
+def _name_from_html(body: str) -> str | None:
     for pattern in TITLE_PATTERNS:
         match = pattern.search(body)
         if not match:
             continue
-        name = html.unescape(re.sub(r"\s+", " ", match.group(1))).strip()
-        name = re.sub(r"\s*[-–—]\s*Google Maps.*$", "", name, flags=re.IGNORECASE)
-        name = re.sub(r"\s*的貢獻內容.*$", "", name)
-        if name and name.lower() != "google maps":
-            return name[:200]
-    return f"貢獻者 {contributor_id[-6:]}"
+        name = _clean_name(match.group(1))
+        if name:
+            return name
+    return None
+
+
+async def _name_from_rendered_page(url: str, contributor_id: str) -> str | None:
+    async with async_playwright() as manager:
+        browser = await manager.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-background-networking",
+                "--disable-dev-shm-usage",
+                "--disable-sync",
+                "--no-first-run",
+            ],
+        )
+        context = await browser.new_context(
+            locale="zh-TW",
+            storage_state={"cookies": [], "origins": []},
+        )
+        page = await context.new_page()
+        page.set_default_timeout(20_000)
+        try:
+            await page.goto(
+                f"{url}?hl=zh-TW",
+                wait_until="domcontentloaded",
+                timeout=60_000,
+            )
+            await page.wait_for_selector(
+                'main[aria-label], [role="main"][aria-label]',
+                state="attached",
+            )
+            final = urlsplit(page.url)
+            expected_path = f"/maps/contrib/{contributor_id}/reviews"
+            if (
+                final.scheme != "https"
+                or final.hostname not in {"google.com", "www.google.com"}
+                or not final.path.startswith(expected_path)
+            ):
+                return None
+            profile = await page.evaluate(PROFILE_NAME_SCRIPT)
+            if not isinstance(profile, dict):
+                return None
+            for candidate in profile.get("candidates", []):
+                name = _clean_name(str(candidate))
+                if name:
+                    return name
+            label = str(profile.get("label", ""))
+            label = re.sub(
+                r"(?:的貢獻內容|的贡献内容|の投稿|님의 참여.*|'s contributions)$",
+                "",
+                label,
+                flags=re.IGNORECASE,
+            )
+            return _clean_name(label)
+        finally:
+            await context.close()
+            await browser.close()
 
 
 async def validate_contributor_url(value: str) -> tuple[str, str]:
@@ -74,7 +165,13 @@ async def validate_contributor_url(value: str) -> tuple[str, str]:
         raise TargetAdminError("unavailable") from exc
     if final_url != canonical or final_id != contributor_id:
         raise TargetAdminError("unavailable")
-    return canonical, _name_from_html(response.text, contributor_id)
+    name = _name_from_html(response.text)
+    if not name:
+        try:
+            name = await _name_from_rendered_page(canonical, contributor_id)
+        except (PlaywrightError, PlaywrightTimeoutError):
+            name = None
+    return canonical, name or f"貢獻者 {contributor_id[-6:]}"
 
 
 def _document(path: Path) -> dict:
