@@ -364,6 +364,25 @@ class MonitorEngine:
                 last_success_at=?,updated_at=? WHERE id=?""",
                 (now_iso, now_iso, target["id"]),
             )
+            if result.contributor:
+                profile = result.contributor
+                con.execute(
+                    """UPDATE targets SET
+                    local_guide_level=COALESCE(?,local_guide_level),
+                    local_guide_points=COALESCE(?,local_guide_points),
+                    next_level_points=CASE WHEN ?=10 THEN NULL
+                        ELSE COALESCE(?,next_level_points) END,
+                    profile_observed_at=?,updated_at=? WHERE id=?""",
+                    (
+                        profile.local_guide_level,
+                        profile.local_guide_points,
+                        profile.local_guide_level,
+                        profile.next_level_points,
+                        now_iso,
+                        now_iso,
+                        target["id"],
+                    ),
+                )
             if recovered:
                 _insert_event(
                     con, "target_recovered", target["id"], None,
@@ -391,6 +410,30 @@ class MonitorEngine:
                     "pending",
                 )
                 con.execute("INSERT INTO meta(key,value) VALUES(?,?)", (summary_key, now_iso))
+
+        if result.contributor and result.contributor.avatar_url:
+            try:
+                avatar = await self.archive.archive_avatar(
+                    int(target["id"]),
+                    result.contributor.avatar_url,
+                    target["avatar_source_url"],
+                    target["avatar_path"],
+                    target["avatar_sha256"],
+                )
+                self.db.connection.execute(
+                    """UPDATE targets SET avatar_source_url=?,avatar_path=?,avatar_sha256=?,
+                    updated_at=? WHERE id=?""",
+                    (
+                        avatar.source_url,
+                        avatar.local_path,
+                        avatar.sha256,
+                        now_iso,
+                        target["id"],
+                    ),
+                )
+                self.db.connection.commit()
+            except Exception as exc:
+                logging.warning("對象 %s：頭像保存失敗：%s", target["name"], exc)
 
         saved_count = 0
         for job in review_images:

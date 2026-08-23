@@ -29,7 +29,7 @@ def test_old_database_is_backed_up_and_migrated(tmp_path):
     assert "publish_estimate" in columns
     row = db.connection.execute("SELECT legacy_publish_date FROM reviews WHERE id=1").fetchone()
     assert row[0] == "2026-07-09"
-    assert list((tmp_path / "backups").glob("pre-schema-v7-*.sqlite3"))
+    assert list((tmp_path / "backups").glob("pre-schema-v8-*.sqlite3"))
     db.close()
 
 
@@ -107,7 +107,7 @@ def test_schema_v4_backs_up_and_removes_duplicate_image_references(tmp_path):
     assert rows[0]["missing_count"] == 0
     assert rows[0]["last_seen_at"] == now
     assert "review_url" in review_columns
-    assert schema_version == "7"
+    assert schema_version == "8"
     assert (version_row["version_number"], version_row["body"], version_row["source"]) == (
         1,
         "內容",
@@ -116,7 +116,7 @@ def test_schema_v4_backs_up_and_removes_duplicate_image_references(tmp_path):
     assert migrated_hash == stable_hash(
         {"place_name": "店家", "place_url": None, "rating": None, "text": "內容"}
     )
-    assert list((tmp_path / "backups").glob("pre-schema-v7-*.sqlite3"))
+    assert list((tmp_path / "backups").glob("pre-schema-v8-*.sqlite3"))
 
 
 def test_schema_v5_removes_byte_distinct_images_with_identical_pixels(tmp_path):
@@ -180,7 +180,7 @@ def test_schema_v5_removes_byte_distinct_images_with_identical_pixels(tmp_path):
     assert len(rows) == 1
     assert rows[0]["pixel_sha256"]
     assert "uq_images_review_pixels" in indexes
-    assert list((tmp_path / "backups").glob("pre-schema-v7-*.sqlite3"))
+    assert list((tmp_path / "backups").glob("pre-schema-v8-*.sqlite3"))
 
 
 def test_schema_v6_removes_recompressed_jpeg_duplicates(tmp_path):
@@ -254,5 +254,5 @@ def test_schema_v6_removes_recompressed_jpeg_duplicates(tmp_path):
 
     assert len(rows) == 1
     assert rows[0]["visual_hash"]
-    assert schema_version == "7"
-    assert list((tmp_path / "backups").glob("pre-schema-v7-*.sqlite3"))
+    assert schema_version == "8"
+    assert list((tmp_path / "backups").glob("pre-schema-v8-*.sqlite3"))

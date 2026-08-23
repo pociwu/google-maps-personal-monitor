@@ -15,6 +15,7 @@
 - 永久保存評論文字、星等與店家資料的每次版本；修改通知附前後摘要。
 - 原圖永久保存；同一評論以原始檔、精確像素及嚴格有損重編碼比對去除重複圖片引用，另產生 480px WebP 縮圖。
 - SQLite 保存日期證據、評論狀態與事件；每日建立本機快照。
+- 貢獻者卡片保存並顯示頭像、在地嚮導等級、積分與下一級進度。
 - 提供 Tailscale 使用的單頁唯讀 Web 儀表板。
 
 ## 唯讀互動保證
@@ -133,12 +134,13 @@ curl http://127.0.0.1:8000/healthz
 舊資料庫由新版第一次開啟前會備份至：
 
 ```text
-state/backups/pre-schema-v7-*.sqlite3
+state/backups/pre-schema-v8-*.sqlite3
 ```
 
 遷移失敗會自動還原。舊推算日期保留為 `legacy_publish_date`。
 
-schema v7 會先備份，再把升級當下的每則評論建立為第 1 版。之後文字、星等或
+schema v8 會先備份；新增貢獻者頭像、在地嚮導等級與積分進度欄位。schema v7
+則會把升級當下的每則評論建立為第 1 版。之後文字、星等或
 店家資料改變時永久新增版本，不覆蓋歷史內容。升級前已經被覆蓋的舊文字無法
 回復，因此差異紀錄從 v0.4.0 部署後開始累積。
 
@@ -208,7 +210,7 @@ sudo systemctl stop maps-monitor.timer maps-monitor-web.service
 cd /opt
 stamp="$(date +%Y%m%d-%H%M%S)"
 sudo mv maps-monitor "maps-monitor.pre-git-${stamp}"
-sudo git clone --branch v0.5.0 --depth 1 \
+sudo git clone --branch v0.6.0 --depth 1 \
   https://github.com/pociwu/google-maps-personal-monitor.git maps-monitor
 sudo cp "maps-monitor.pre-git-${stamp}/.env" maps-monitor/.env
 sudo cp "maps-monitor.pre-git-${stamp}/config/targets.yaml" \
@@ -228,7 +230,7 @@ Ubuntu 只部署版本標籤，不直接跟隨 `main`：
 
 ```bash
 cd /opt/maps-monitor
-sudo ./deploy/update.sh v0.5.0
+sudo ./deploy/update.sh v0.6.0
 ```
 
 更新程式會先備份、取得指定標籤、重建映像、補建縮圖並執行 Web 健康檢查；失敗時回到部署前的程式版本。

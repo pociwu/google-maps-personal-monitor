@@ -33,6 +33,32 @@ body {
   background: color-mix(in srgb, var(--bs-body-bg) 88%, var(--dashboard-accent) 12%);
 }
 
+.contributor-avatar {
+  width: 3.5rem;
+  height: 3.5rem;
+  flex: 0 0 3.5rem;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid color-mix(in srgb, var(--bs-border-color) 75%, var(--dashboard-accent) 25%);
+  background: var(--bs-secondary-bg);
+}
+
+.contributor-avatar-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--bs-secondary-color);
+  font-weight: 700;
+}
+
+.guide-progress .progress {
+  height: .55rem;
+  background: color-mix(in srgb, var(--bs-secondary-bg) 80%, var(--dashboard-accent) 20%);
+}
+
+.guide-progress .progress-bar {
+  background: linear-gradient(90deg, #0891b2, var(--dashboard-accent));
+}
+
 .reorderable-contributor.dragging {
   opacity: .55;
   transform: scale(.98);

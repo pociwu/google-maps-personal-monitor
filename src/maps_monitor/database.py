@@ -33,6 +33,13 @@ CREATE TABLE IF NOT EXISTS targets (
     consecutive_failures INTEGER NOT NULL DEFAULT 0,
     failure_alerted INTEGER NOT NULL DEFAULT 0,
     last_success_at TEXT,
+    avatar_source_url TEXT,
+    avatar_path TEXT,
+    avatar_sha256 TEXT,
+    local_guide_level INTEGER,
+    local_guide_points INTEGER,
+    next_level_points INTEGER,
+    profile_observed_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -218,6 +225,16 @@ IMAGE_MIGRATION_COLUMNS = {
     "missing_count": "INTEGER NOT NULL DEFAULT 0",
 }
 
+TARGET_MIGRATION_COLUMNS = {
+    "avatar_source_url": "TEXT",
+    "avatar_path": "TEXT",
+    "avatar_sha256": "TEXT",
+    "local_guide_level": "INTEGER",
+    "local_guide_points": "INTEGER",
+    "next_level_points": "INTEGER",
+    "profile_observed_at": "TEXT",
+}
+
 
 class Database:
     def __init__(self, path: Path):
@@ -251,6 +268,9 @@ class Database:
         old_image_columns = {
             row[1] for row in self.connection.execute("PRAGMA table_info(images)").fetchall()
         } if "images" in existing_tables else set()
+        old_target_columns = {
+            row[1] for row in self.connection.execute("PRAGMA table_info(targets)").fetchall()
+        } if "targets" in existing_tables else set()
         existing_indexes = {
             row[0]
             for row in self.connection.execute(
@@ -267,11 +287,13 @@ class Database:
             or (bool(old_image_columns) and "pixel_sha256" not in old_image_columns)
             or (bool(old_image_columns) and "uq_images_review_pixels" not in existing_indexes)
             or (bool(old_image_columns) and "visual_hash" not in old_image_columns)
+            or (bool(old_target_columns) and "local_guide_level" not in old_target_columns)
         )
         migration_backup = self._backup_before_migration() if migration_needed else None
         try:
             self.connection.execute("BEGIN IMMEDIATE")
             self.connection.executescript(SCHEMA)
+            self._add_missing_columns("targets", TARGET_MIGRATION_COLUMNS)
             self._add_missing_columns("reviews", REVIEW_MIGRATION_COLUMNS)
             self._add_missing_columns("observations", OBSERVATION_MIGRATION_COLUMNS)
             self._add_missing_columns("images", IMAGE_MIGRATION_COLUMNS)
@@ -319,8 +341,8 @@ class Database:
             self._backfill_observation_parsing()
             versioned = self._backfill_review_versions(old_review_columns)
             self.connection.execute(
-                "INSERT INTO meta(key,value) VALUES('schema_version','7') "
-                "ON CONFLICT(key) DO UPDATE SET value='7'"
+                "INSERT INTO meta(key,value) VALUES('schema_version','8') "
+                "ON CONFLICT(key) DO UPDATE SET value='8'"
             )
             self.connection.commit()
             if migration_needed:
@@ -558,7 +580,7 @@ class Database:
     def _backup_before_migration(self) -> Path:
         backup_dir = self.path.parent.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
-        destination = backup_dir / f"pre-schema-v7-{datetime.now().strftime('%Y%m%d-%H%M%S')}.sqlite3"
+        destination = backup_dir / f"pre-schema-v8-{datetime.now().strftime('%Y%m%d-%H%M%S')}.sqlite3"
         target = sqlite3.connect(destination)
         try:
             self.connection.backup(target)

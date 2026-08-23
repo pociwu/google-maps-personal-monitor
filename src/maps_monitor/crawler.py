@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from playwright.async_api import Browser, Page, async_playwright
 
 from .dates import normalize_relative_label
-from .models import CrawlResult, ScrapedReview
+from .models import CrawlResult, ScrapedContributor, ScrapedReview
 from .util import stable_hash
 
 
@@ -78,6 +78,90 @@ EXTRACT_SCRIPT = r"""
   }).filter((item) => item.google_review_id || item.place_url || item.text || item.rating_label);
 }
 """
+
+
+EXTRACT_CONTRIBUTOR_SCRIPT = r"""
+() => {
+  const visible = (node) => {
+    const rect = node.getBoundingClientRect();
+    return rect.width >= 48 && rect.height >= 48 && rect.top < 700 && rect.bottom > 0;
+  };
+  const images = Array.from(document.querySelectorAll('img')).filter((img) => {
+    const src = img.currentSrc || img.src || '';
+    return visible(img) && /googleusercontent|ggpht/.test(src) &&
+      img.naturalWidth >= 64 && img.naturalHeight >= 64;
+  });
+  images.sort((left, right) => {
+    const score = (img) => {
+      const rect = img.getBoundingClientRect();
+      const square = Math.abs(rect.width - rect.height) < 8 ? 1000 : 0;
+      const alt = (img.alt || '').trim() ? 500 : 0;
+      return square + alt + rect.width * rect.height - Math.max(0, rect.top);
+    };
+    return score(right) - score(left);
+  });
+  const headerText = (document.body.innerText || '').slice(0, 3000);
+  return {
+    avatar_url: images.length ? (images[0].currentSrc || images[0].src || null) : null,
+    header_text: headerText,
+  };
+}
+"""
+
+
+LOCAL_GUIDE_THRESHOLDS = {
+    1: 0,
+    2: 15,
+    3: 75,
+    4: 250,
+    5: 500,
+    6: 1500,
+    7: 5000,
+    8: 15000,
+    9: 50000,
+    10: 100000,
+}
+
+
+def _number(value: str) -> int:
+    return int(re.sub(r"[^0-9]", "", value))
+
+
+def contributor_from_raw(raw: object) -> ScrapedContributor:
+    if not isinstance(raw, dict):
+        return ScrapedContributor()
+    text = str(raw.get("header_text") or "")
+    level_match = re.search(
+        r"(?:在地嚮導\s*第\s*|Local\s+Guide\s*(?:Level\s*)?)(\d+)\s*(?:級|$)?",
+        text,
+        re.I,
+    )
+    level = int(level_match.group(1)) if level_match else None
+    points = None
+    next_points = None
+    ratio = re.search(r"([\d,，]+)\s*[/／]\s*([\d,，]+)\s*(?:分|點|points?)", text, re.I)
+    if ratio:
+        points, next_points = _number(ratio.group(1)), _number(ratio.group(2))
+    elif level and level < 10:
+        remaining = re.search(
+            r"(?:再累積|尚需|還差|距離下一級|to\s+go)\s*([\d,，]+)\s*(?:分|點|points?)",
+            text,
+            re.I,
+        )
+        next_points = LOCAL_GUIDE_THRESHOLDS[level + 1]
+        if remaining:
+            points = max(0, next_points - _number(remaining.group(1)))
+    elif level == 10:
+        direct = re.search(r"([\d,，]+)\s*(?:分|點|points?)", text, re.I)
+        if direct:
+            points = _number(direct.group(1))
+    avatar_url = raw.get("avatar_url")
+    return ScrapedContributor(
+        avatar_url=str(avatar_url) if avatar_url else None,
+        local_guide_level=level,
+        local_guide_points=points,
+        next_level_points=next_points,
+    )
 
 
 EXPAND_REVIEW_TEXT_SCRIPT = r"""
@@ -259,6 +343,9 @@ class ReadOnlyCrawler:
         try:
             await page.goto(_localized_url(url, self.locale), wait_until="domcontentloaded", timeout=60_000)
             await page.wait_for_timeout(3000)
+            contributor = contributor_from_raw(
+                await page.evaluate(EXTRACT_CONTRIBUTOR_SCRIPT)
+            )
             stable_rounds = 0
             previous = (-1, -1)
             reached_end = False
@@ -331,7 +418,7 @@ class ReadOnlyCrawler:
                 )
             if not reviews:
                 raise RuntimeError(f"{name} 找不到任何評論卡片，可能是頁面改版或內容未載入")
-            return CrawlResult(reviews, True, time.monotonic() - started)
+            return CrawlResult(reviews, True, time.monotonic() - started, contributor)
         except Exception:
             await self._save_debug(page, name)
             raise

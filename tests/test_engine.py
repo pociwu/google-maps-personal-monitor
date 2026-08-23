@@ -5,8 +5,8 @@ import json
 from maps_monitor.config import Settings, TargetConfig
 from maps_monitor.database import Database
 from maps_monitor.engine import MonitorEngine
-from maps_monitor.images import ImageSyncResult
-from maps_monitor.models import CrawlResult, ScrapedReview
+from maps_monitor.images import AvatarArchiveResult, ImageSyncResult
+from maps_monitor.models import CrawlResult, ScrapedContributor, ScrapedReview
 
 
 def settings(tmp_path: Path) -> Settings:
@@ -174,6 +174,41 @@ class _ImageResults:
 
     def has_capacity(self):
         return True
+
+
+class _ProfileArchive:
+    async def archive(self, _database, _review_id, _urls):
+        return ImageSyncResult((), 0, 0, 0, True)
+
+    async def archive_avatar(self, target_id, source_url, *_previous):
+        return AvatarArchiveResult(source_url, f"/images/avatars/target-{target_id}.webp", "a" * 64)
+
+    def has_capacity(self):
+        return True
+
+
+def test_contributor_profile_is_persisted_after_successful_crawl(tmp_path):
+    cfg = settings(tmp_path)
+    db = Database(cfg.database)
+    engine = MonitorEngine(cfg, db)
+    engine.archive = _ProfileArchive()
+    target = db.sync_targets(cfg.targets, 0)[0]
+    profile = ScrapedContributor(
+        avatar_url="https://example.test/avatar",
+        local_guide_level=3,
+        local_guide_points=159,
+        next_level_points=250,
+    )
+
+    asyncio.run(engine.process_success(target, CrawlResult([review()], True, 1, profile)))
+
+    row = db.connection.execute("SELECT * FROM targets WHERE id=?", (target["id"],)).fetchone()
+    assert row["avatar_source_url"] == "https://example.test/avatar"
+    assert row["avatar_path"] == "/images/avatars/target-1.webp"
+    assert row["local_guide_level"] == 3
+    assert row["local_guide_points"] == 159
+    assert row["next_level_points"] == 250
+    db.close()
 
 
 def test_only_unique_image_set_changes_create_modified_event(tmp_path):

@@ -20,6 +20,14 @@ def _seed(tmp_path: Path) -> tuple[Path, Path, str]:
         VALUES('測試貢獻者','https://www.google.com/maps/contrib/1/reviews',1,?,?,?)""",
         (now, now, now),
     ).lastrowid
+    avatar = image_root / "avatars" / "display" / f"target-{target_id}" / "avatar.webp"
+    avatar.parent.mkdir(parents=True)
+    Image.new("RGB", (64, 64), "purple").save(avatar, format="WEBP")
+    database.connection.execute(
+        """UPDATE targets SET avatar_path=?,avatar_sha256=?,local_guide_level=3,
+        local_guide_points=159,next_level_points=250,profile_observed_at=? WHERE id=?""",
+        (str(avatar), "a" * 64, now, target_id),
+    )
     active_id = database.connection.execute(
         """INSERT INTO reviews
         (target_id,review_key,review_url,place_name,rating,body,relative_time,publish_date,
@@ -143,6 +151,13 @@ def test_dashboard_filters_and_noindex(tmp_path, monkeypatch):
     assert "2 天前" in response.text
     assert "查看 Google 評論" in response.text
     assert "在 Google Maps 搜尋店家" in response.text
+    assert "在地嚮導 第 3 級" in response.text
+    assert "159 / 250 分" in response.text
+    assert "差 91 分升到第 4 級" in response.text
+    assert 'src="/avatars/1"' in response.text
+    avatar = client.get("/avatars/1")
+    assert avatar.status_code == 200
+    assert avatar.headers["content-type"] == "image/webp"
     assert 'target="_blank"' in response.text
     assert 'rel="noopener noreferrer"' in response.text
     assert "查看日期推算證據" in response.text

@@ -33,6 +33,13 @@ class ImageSyncResult:
     complete: bool
 
 
+@dataclass(frozen=True, slots=True)
+class AvatarArchiveResult:
+    source_url: str
+    local_path: str
+    sha256: str
+
+
 class ImageArchive:
     def __init__(self, root: Path, min_free_gb: int, min_free_percent: int):
         self.root = root
@@ -44,6 +51,60 @@ class ImageArchive:
         usage = shutil.disk_usage(self.root)
         free_percent = usage.free * 100 / usage.total
         return usage.free >= self.min_free_bytes and free_percent >= self.min_free_percent
+
+    async def archive_avatar(
+        self,
+        target_id: int,
+        source_url: str,
+        previous_source_url: str | None = None,
+        previous_path: str | None = None,
+        previous_sha256: str | None = None,
+    ) -> AvatarArchiveResult:
+        if (
+            source_url == previous_source_url
+            and previous_path
+            and previous_sha256
+            and Path(previous_path).exists()
+        ):
+            return AvatarArchiveResult(source_url, previous_path, previous_sha256)
+        if not self.has_capacity():
+            raise OSError("磁碟剩餘空間低於安全門檻，未保存貢獻者頭像")
+        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+            response = await client.get(source_url)
+            response.raise_for_status()
+        content = response.content
+        if len(content) > MAX_IMAGE_BYTES:
+            raise ValueError("貢獻者頭像超過 25 MB")
+        digest = hashlib.sha256(content).hexdigest()
+        content_type = response.headers.get("content-type", "").lower().split(";", 1)[0]
+        extension = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+            "image/avif": ".avif",
+        }.get(content_type, ".img")
+        original = self.root / "avatars" / "original" / digest[:2] / f"{digest}{extension}"
+        original.parent.mkdir(parents=True, exist_ok=True)
+        if not original.exists():
+            temporary = original.with_suffix(original.suffix + ".part")
+            temporary.write_bytes(content)
+            os.replace(temporary, original)
+        display = self.root / "avatars" / "display" / f"target-{target_id}" / f"{digest}.webp"
+        if not display.exists():
+            display.parent.mkdir(parents=True, exist_ok=True)
+            temporary_display = display.with_suffix(".webp.part")
+            try:
+                with Image.open(original) as image:
+                    image.seek(0)
+                    image = ImageOps.exif_transpose(image).convert("RGB")
+                    image = ImageOps.fit(image, (256, 256), Image.Resampling.LANCZOS)
+                    image.save(temporary_display, format="WEBP", quality=88, method=6)
+                os.replace(temporary_display, display)
+            except (OSError, UnidentifiedImageError):
+                temporary_display.unlink(missing_ok=True)
+                raise
+        return AvatarArchiveResult(source_url, str(display), digest)
 
     def _thumbnail_path(self, digest: str) -> Path:
         return self.root / "thumbnails" / digest[:2] / f"{digest}.webp"

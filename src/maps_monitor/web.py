@@ -247,7 +247,8 @@ def _dashboard_data(request: Request) -> dict:
     }
     with _read_connection() as connection:
         contributor_rows = connection.execute(
-            """SELECT t.name,t.url,t.last_success_at,
+            """SELECT t.id,t.name,t.url,t.last_success_at,t.avatar_path,t.avatar_sha256,
+            t.local_guide_level,t.local_guide_points,t.next_level_points,t.profile_observed_at,
             COUNT(r.id) AS total_count,
             COALESCE(SUM(CASE WHEN r.status='active' THEN 1 ELSE 0 END),0) AS active_count,
             COALESCE(SUM(CASE WHEN r.modified_at IS NOT NULL THEN 1 ELSE 0 END),0) AS modified_count,
@@ -255,7 +256,9 @@ def _dashboard_data(request: Request) -> dict:
             COALESCE(SUM(CASE WHEN TRIM(r.body)='' THEN 1 ELSE 0 END),0) AS rating_only_count
             FROM targets t LEFT JOIN reviews r ON r.target_id=t.id
             WHERE t.enabled=1
-            GROUP BY t.id,t.name,t.url,t.last_success_at ORDER BY t.name"""
+            GROUP BY t.id,t.name,t.url,t.last_success_at,t.avatar_path,t.avatar_sha256,
+            t.local_guide_level,t.local_guide_points,t.next_level_points,t.profile_observed_at
+            ORDER BY t.name"""
         ).fetchall()
         try:
             configured_order = {
@@ -350,6 +353,31 @@ def _dashboard_data(request: Request) -> dict:
         item["last_success_text"] = _local_datetime(item["last_success_at"])
         item["freshness"] = _freshness(item["last_success_at"])
         item["href"] = _query_url(params, contributor=item["name"], page=1)
+        item["avatar_url"] = f"/avatars/{item['id']}" if item["avatar_path"] else None
+        level = item["local_guide_level"]
+        points = item["local_guide_points"]
+        next_points = item["next_level_points"]
+        lower_points = {
+            1: 0, 2: 15, 3: 75, 4: 250, 5: 500,
+            6: 1500, 7: 5000, 8: 15000, 9: 50000, 10: 100000,
+        }.get(level)
+        if level == 10 and points is not None:
+            item["progress_percent"] = 100
+        elif (
+            points is not None and next_points is not None and lower_points is not None
+            and next_points > lower_points
+        ):
+            item["progress_percent"] = max(
+                0, min(100, round((points - lower_points) * 100 / (next_points - lower_points)))
+            )
+        else:
+            item["progress_percent"] = None
+        item["points_text"] = f"{points:,}" if points is not None else None
+        item["next_points_text"] = f"{next_points:,}" if next_points is not None else None
+        item["remaining_points_text"] = (
+            f"{max(0, next_points - points):,}"
+            if points is not None and next_points is not None else None
+        )
         contributors.append(item)
     for review in reviews:
         review["rating_only"] = not (review["body"] or "").strip()
@@ -706,6 +734,31 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404) from exc
         return FileResponse(
             path,
+            headers={"Cache-Control": "private, max-age=86400"},
+            content_disposition_type="inline",
+        )
+
+    @application.get("/avatars/{target_id}")
+    def avatar(target_id: int):
+        try:
+            with _read_connection() as connection:
+                row = connection.execute(
+                    "SELECT avatar_path FROM targets WHERE id=? AND enabled=1",
+                    (target_id,),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise HTTPException(status_code=503) from exc
+        if not row or not row["avatar_path"]:
+            raise HTTPException(status_code=404)
+        try:
+            path = Path(row["avatar_path"]).resolve(strict=True)
+            if not path.is_relative_to(IMAGE_ROOT):
+                raise HTTPException(status_code=404)
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(status_code=404) from exc
+        return FileResponse(
+            path,
+            media_type="image/webp",
             headers={"Cache-Control": "private, max-age=86400"},
             content_disposition_type="inline",
         )

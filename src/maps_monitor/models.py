@@ -36,3 +36,12 @@ class CrawlResult:
     reviews: list[ScrapedReview]
     reached_end: bool
     elapsed_seconds: float
+    contributor: ScrapedContributor | None = None
+
+
+@dataclass(slots=True)
+class ScrapedContributor:
+    avatar_url: str | None = None
+    local_guide_level: int | None = None
+    local_guide_points: int | None = None
+    next_level_points: int | None = None

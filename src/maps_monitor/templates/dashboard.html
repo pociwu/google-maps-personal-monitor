@@ -75,14 +75,48 @@
               <button class="drag-handle btn btn-sm btn-outline-secondary"
                       type="button" title="拖曳調整順序"
                       aria-label="拖曳調整 {{ person.name }} 的順序">⠿</button>
-              <h3 class="h6 text-truncate flex-grow-1 mt-1" title="{{ person.name }}">
-                <a class="text-decoration-none" href="{{ person.href }}"
-                   {% if selected_contributor == person.name %}aria-current="true"{% endif %}>
-                  {{ person.name }}
-                </a>
-              </h3>
+              <div class="contributor-identity d-flex align-items-center gap-2 flex-grow-1 overflow-hidden">
+                {% if person.avatar_url %}
+                <img class="contributor-avatar" src="{{ person.avatar_url }}"
+                     alt="{{ person.name }}的頭像" width="56" height="56" loading="lazy">
+                {% else %}
+                <span class="contributor-avatar contributor-avatar-placeholder" aria-hidden="true">
+                  {{ person.name[:1] }}
+                </span>
+                {% endif %}
+                <div class="overflow-hidden">
+                  <h3 class="h6 text-truncate mb-1" title="{{ person.name }}">
+                    <a class="text-decoration-none" href="{{ person.href }}"
+                       {% if selected_contributor == person.name %}aria-current="true"{% endif %}>
+                      {{ person.name }}
+                    </a>
+                  </h3>
+                  {% if person.local_guide_level %}
+                  <span class="small text-body-secondary">在地嚮導 第 {{ person.local_guide_level }} 級</span>
+                  {% else %}
+                  <span class="small text-body-secondary">等級資料尚未取得</span>
+                  {% endif %}
+                </div>
+              </div>
               <span class="freshness-dot {{ person.freshness }}" aria-label="資料狀態：{{ person.freshness }}"></span>
             </div>
+            {% if person.progress_percent is not none %}
+            <div class="guide-progress mt-3">
+              <div class="progress" role="progressbar"
+                   aria-label="{{ person.name }}的在地嚮導升級進度"
+                   aria-valuenow="{{ person.progress_percent }}" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress-bar" style="width: {{ person.progress_percent }}%"></div>
+              </div>
+              <div class="small text-body-secondary mt-1 d-flex justify-content-between gap-2">
+                {% if person.local_guide_level == 10 %}
+                <span>{{ person.points_text }} 分</span><span>最高等級</span>
+                {% else %}
+                <span>{{ person.points_text }} / {{ person.next_points_text }} 分</span>
+                <span>差 {{ person.remaining_points_text }} 分升到第 {{ person.local_guide_level + 1 }} 級</span>
+                {% endif %}
+              </div>
+            </div>
+            {% endif %}
             <p class="mb-2"><strong>{{ person.total_count }}</strong> 筆</p>
             <div class="small text-body-secondary">
               有效 {{ person.active_count }} · 曾修改 {{ person.modified_count }}<br>

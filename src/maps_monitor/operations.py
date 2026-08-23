@@ -60,6 +60,19 @@ def backup(db: Database, settings: Settings) -> Path:
         if not linked.exists():
             os.link(source, linked)
         manifest.append({"sha256": row["sha256"], "path": str(relative), "bytes": row["byte_size"]})
+    avatar_root = settings.image_dir / "avatars"
+    if avatar_root.exists():
+        for source in avatar_root.rglob("*"):
+            if not source.is_file():
+                continue
+            relative = source.relative_to(settings.image_dir)
+            linked = image_snapshot / relative
+            linked.parent.mkdir(parents=True, exist_ok=True)
+            if not linked.exists():
+                os.link(source, linked)
+            manifest.append(
+                {"sha256": source.stem.split(".", 1)[0], "path": str(relative), "bytes": source.stat().st_size}
+            )
     (destination / "images-manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )
