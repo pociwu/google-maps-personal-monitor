@@ -127,12 +127,12 @@ http://100.x.x.x:8000/
 
 `/analytics` 會使用目前資料庫捕捉到的有效及已刪除評論，顯示：
 
-- 資料品質、星期分布、四個時段、24 小時熱圖、月份時間軸與逐筆發文時間。
+- 資料品質、星期分布、星期 × 2 小時時段熱圖、四個時段、24 小時熱圖、月份時間軸與逐筆發文時間。
 - Google 完整時間與窄區間推算的數量；推算時間只在誤差半徑不超過 3 小時時納入時段圖。
 - 發文間隔中位數、IQR、接近中位數的比例與前後期一致性，以及保守的星期／時段偏向判斷。
 - 圖表使用全部資料；逐筆明細為避免手機頁面過大，最多顯示最近 100 筆。
 
-只有完整時間戳才算 Google 精確時間；窄區間資料在圖中使用區間中點，頁面會保持「推算」標示。全部貢獻者合併圖只作總覽，不跨人物判定共同規律。單一貢獻者未達長期樣本門檻時，只顯示「初步偏向」並明確標示尚不能確認穩定規律。同一貢獻者同日的多則評論在規律判斷時會去重，圖表仍保留每一則資料。
+只有完整時間戳才算 Google 精確時間；窄區間資料在 24 小時圖中使用區間中點，頁面會保持「推算」標示。星期 × 2 小時圖採更保守規則：推算區間必須完整落在同一個台灣日期及同一個 2 小時格才納入。全部貢獻者合併圖只作總覽，不跨人物判定共同規律。單一貢獻者未達長期樣本門檻時，只顯示「初步偏向」並明確標示尚不能確認穩定規律。同一貢獻者同日的多則評論在規律判斷時會去重，圖表仍保留每一則資料。
 
 只有修改時間、無法復原發文時間的評論仍出現在明細，但不會混入發文日期或時段統計。分析只能代表監控已捕捉的評論；監控啟用前已刪除或 Google 未載入的歷史評論不在樣本內。
 
@@ -225,7 +225,7 @@ sudo systemctl stop maps-monitor.timer maps-monitor-web.service
 cd /opt
 stamp="$(date +%Y%m%d-%H%M%S)"
 sudo mv maps-monitor "maps-monitor.pre-git-${stamp}"
-sudo git clone --branch v0.7.0 --depth 1 \
+sudo git clone --branch v0.7.1 --depth 1 \
   https://github.com/pociwu/google-maps-personal-monitor.git maps-monitor
 sudo cp "maps-monitor.pre-git-${stamp}/.env" maps-monitor/.env
 sudo cp "maps-monitor.pre-git-${stamp}/config/targets.yaml" \
@@ -245,7 +245,7 @@ Ubuntu 只部署版本標籤，不直接跟隨 `main`：
 
 ```bash
 cd /opt/maps-monitor
-sudo ./deploy/update.sh v0.7.0
+sudo ./deploy/update.sh v0.7.1
 ```
 
 更新程式會先備份、取得指定標籤、重建映像、補建縮圖並執行 Web 健康檢查；失敗時回到部署前的程式版本。

@@ -257,6 +257,86 @@ body {
 }
 .hour-strength-4 small { color: rgba(255, 255, 255, .8); }
 
+.weekday-time-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+}
+
+.weekday-time-scroll:focus-visible {
+  outline: .2rem solid var(--bs-focus-ring-color);
+  outline-offset: .15rem;
+}
+
+.weekday-time-heatmap {
+  min-width: 42rem;
+  table-layout: fixed;
+  font-variant-numeric: tabular-nums;
+}
+
+.weekday-time-heatmap th,
+.weekday-time-heatmap td {
+  padding: .55rem .4rem;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.weekday-time-heatmap thead th {
+  background: var(--bs-body-bg);
+  white-space: nowrap;
+}
+
+.weekday-time-heatmap .weekday-time-axis {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  width: 8.25rem;
+  background: var(--bs-body-bg);
+  box-shadow: 1px 0 0 var(--bs-border-color);
+  white-space: nowrap;
+}
+
+.weekday-time-heatmap thead .weekday-time-axis {
+  z-index: 3;
+}
+
+.weekday-time-cell {
+  min-width: 3.5rem;
+  height: 3.15rem;
+  border-color: var(--bs-border-color);
+}
+
+.weekday-time-cell strong {
+  font-size: 1rem;
+}
+
+.weekday-time-heatmap .weekday-time-cell.hour-strength-0 {
+  background: var(--bs-tertiary-bg);
+  box-shadow: none;
+}
+
+.weekday-time-heatmap .weekday-time-cell.hour-strength-1 {
+  background: color-mix(in srgb, var(--bs-body-bg) 82%, var(--dashboard-accent) 18%);
+  box-shadow: none;
+}
+
+.weekday-time-heatmap .weekday-time-cell.hour-strength-2 {
+  background: color-mix(in srgb, var(--bs-body-bg) 66%, var(--dashboard-accent) 34%);
+  box-shadow: none;
+}
+
+.weekday-time-heatmap .weekday-time-cell.hour-strength-3 {
+  background: color-mix(in srgb, var(--bs-body-bg) 48%, var(--dashboard-accent) 52%);
+  box-shadow: none;
+}
+
+.weekday-time-heatmap .weekday-time-cell.hour-strength-4 {
+  color: #fff;
+  background: var(--dashboard-accent);
+  box-shadow: none;
+}
+
 .analytics-findings {
   border-left: .3rem solid var(--dashboard-accent);
 }

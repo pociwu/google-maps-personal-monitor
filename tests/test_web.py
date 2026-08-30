@@ -271,6 +271,15 @@ def test_posting_time_analytics_page_separates_exact_and_estimated_samples(
     assert 'title="11:00：1 筆"' in selected.text
     assert 'title="16:00：1 筆"' in selected.text
     assert "完整 1 · 推算 1" in selected.text
+    assert "星期 × 2 小時時段熱圖" in selected.text
+    assert "X 軸是星期，Y 軸是台灣時間，每 2 小時一格" in selected.text
+    assert "納入 1 ·" in selected.text
+    assert 'role="region" aria-labelledby="weekday-time-chart-title" tabindex="0"' in selected.text
+    assert 'aria-label="星期一">一</th>' in selected.text
+    assert 'scope="row">10:00–11:59</th>' in selected.text
+    assert "星期二 10:00–11:59：1 筆，完整 1、推算 0" in selected.text
+    assert "整個可信區間都落在同一個台灣日期、同一個 2 小時格" in selected.text
+    assert "24 小時圖" in selected.text
     assert "只有日期的評論不會被硬塞進時段圖" in selected.text
     assert "只有修改時間證據 1 筆" in selected.text
     assert "已刪除店家" in selected.text

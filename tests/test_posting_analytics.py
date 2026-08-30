@@ -257,3 +257,121 @@ def test_findings_deduplicate_same_contributor_day_and_exclude_edit_time():
     morning = next(item for item in result["period_bars"] if item["label"] == "上午")
     assert morning["confirmed_count"] == 3
     assert morning["estimated_count"] == 0
+
+
+def test_weekday_two_hour_heatmap_has_fixed_shape_and_uses_taiwan_time():
+    rows = [
+        _confirmed("2026-08-03T16:30:00+00:00"),  # Tuesday 00:30 in Taiwan
+        _confirmed("2026-08-04T17:59:00+00:00"),  # Wednesday 01:59
+        _confirmed("2026-08-04T18:00:00+00:00"),  # Wednesday 02:00
+    ]
+
+    result = build_posting_analytics(rows)
+    heatmap = result["weekday_two_hour_heatmap"]
+
+    assert [item["full_label"] for item in heatmap["weekdays"]] == [
+        "星期一",
+        "星期二",
+        "星期三",
+        "星期四",
+        "星期五",
+        "星期六",
+        "星期日",
+    ]
+    assert len(heatmap["rows"]) == 12
+    assert sum(len(row["cells"]) for row in heatmap["rows"]) == 84
+    assert heatmap["rows"][0]["label"] == "00:00–01:59"
+    assert heatmap["rows"][11]["label"] == "22:00–23:59"
+    assert heatmap["rows"][0]["cells"][1]["count"] == 1
+    assert heatmap["rows"][0]["cells"][2]["count"] == 1
+    assert heatmap["rows"][1]["cells"][2]["count"] == 1
+    assert heatmap["eligible_count"] == 3
+    assert heatmap["confirmed_count"] == 3
+    assert heatmap["estimated_count"] == 0
+    assert heatmap["excluded_count"] == 0
+    assert sum(
+        cell["count"]
+        for row in heatmap["rows"]
+        for cell in row["cells"]
+    ) == heatmap["eligible_count"]
+
+
+def test_weekday_two_hour_heatmap_only_accepts_estimates_inside_one_cell():
+    rows = [
+        {
+            "publish_date": "2026-08-03",
+            "publish_estimate": "2026-08-03T01:00:00+00:00",
+            "publish_earliest": "2026-08-03T00:30:00+00:00",
+            "publish_latest": "2026-08-03T01:30:00+00:00",
+            "confidence": "high_estimate",
+            "status": "active",
+        },
+        {
+            "publish_date": "2026-08-03",
+            "publish_estimate": "2026-08-03T02:00:00+00:00",
+            "publish_earliest": "2026-08-03T01:30:00+00:00",
+            "publish_latest": "2026-08-03T02:30:00+00:00",
+            "confidence": "high_estimate",
+            "status": "active",
+        },
+        {
+            "publish_date": "2026-08-03",
+            "publish_estimate": "2026-08-03T16:00:00+00:00",
+            "publish_earliest": "2026-08-03T15:30:00+00:00",
+            "publish_latest": "2026-08-03T16:30:00+00:00",
+            "confidence": "high_estimate",
+            "status": "active",
+        },
+    ]
+
+    heatmap = build_posting_analytics(rows)["weekday_two_hour_heatmap"]
+
+    assert heatmap["eligible_count"] == 1
+    assert heatmap["confirmed_count"] == 0
+    assert heatmap["estimated_count"] == 1
+    assert heatmap["excluded_count"] == 2
+    monday_08_to_09 = heatmap["rows"][4]["cells"][0]
+    assert monday_08_to_09["count"] == 1
+    assert monday_08_to_09["estimated_count"] == 1
+    assert monday_08_to_09["strength"] == 4
+    assert heatmap["rows"][0]["cells"][0]["strength"] == 0
+
+
+def test_weekday_two_hour_heatmap_excludes_non_publish_time_but_keeps_deleted():
+    rows = [
+        {**_confirmed("2026-08-03T04:00:00+00:00", status="deleted")},
+        {
+            **_confirmed("2026-08-03T05:00:00+00:00"),
+            "time_subject": "last_edit",
+        },
+        {
+            "publish_date": "2026-08-03",
+            "confidence": "unrecoverable",
+            "status": "active",
+        },
+        {
+            "publish_date": "2026-08-03",
+            "confidence": "estimate",
+            "status": "active",
+        },
+    ]
+
+    heatmap = build_posting_analytics(rows)["weekday_two_hour_heatmap"]
+
+    assert heatmap["eligible_count"] == 1
+    assert heatmap["confirmed_count"] == 1
+    assert heatmap["excluded_count"] == 3
+    assert heatmap["rows"][6]["cells"][0]["count"] == 1
+
+
+def test_empty_weekday_two_hour_heatmap_still_contains_all_cells():
+    heatmap = build_posting_analytics([])["weekday_two_hour_heatmap"]
+
+    assert heatmap["eligible_count"] == 0
+    assert heatmap["max_count"] == 0
+    assert len(heatmap["rows"]) == 12
+    assert all(
+        cell["count"] == 0 and cell["strength"] == 0
+        for row in heatmap["rows"]
+        for cell in row["cells"]
+    )

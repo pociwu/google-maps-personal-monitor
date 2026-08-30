@@ -18,6 +18,8 @@ PERIODS = (
     ("下午", 12, 18),
     ("晚上", 18, 24),
 )
+TWO_HOUR_SLOT_SIZE = 2
+TWO_HOUR_SLOT_COUNT = 24 // TWO_HOUR_SLOT_SIZE
 
 
 def _value(row: Mapping[str, object], key: str) -> object | None:
@@ -143,6 +145,41 @@ def _period_label(value: datetime) -> str:
     return next(
         label for label, start, end in PERIODS if start <= value.hour < end
     )
+
+
+def _weekday_two_hour_slot(
+    row: Mapping[str, object], timezone: ZoneInfo
+) -> tuple[int, int, str] | None:
+    """Return a safe Taiwan weekday, two-hour slot, and time kind for one review."""
+    confidence = _text(row, "confidence") or ""
+    estimate = _parse_datetime(_value(row, "publish_estimate"))
+    interval = _interval(row, timezone)
+
+    if confidence == "confirmed_time":
+        if estimate is not None:
+            value = estimate.astimezone(timezone)
+        elif interval is not None and interval[0] == interval[2]:
+            value = interval[1]
+        else:
+            return None
+        return value.weekday(), value.hour // TWO_HOUR_SLOT_SIZE, "confirmed"
+
+    if interval is None:
+        return None
+    lower, midpoint, upper = interval
+    half_width = max(
+        abs((midpoint - lower).total_seconds()),
+        abs((upper - midpoint).total_seconds()),
+    )
+    if half_width > MAX_ESTIMATED_TIME_HALF_WIDTH_SECONDS:
+        return None
+    if lower.date() != upper.date():
+        return None
+    lower_slot = lower.hour // TWO_HOUR_SLOT_SIZE
+    upper_slot = upper.hour // TWO_HOUR_SLOT_SIZE
+    if lower_slot != upper_slot:
+        return None
+    return lower.weekday(), lower_slot, "estimated"
 
 
 def _make_bars(labels: Iterable[Any], counts: Counter[Any], total: int) -> list[dict[str, Any]]:
@@ -277,6 +314,11 @@ def build_posting_analytics(
     unrecoverable_count = 0
     period_confirmed_counts: Counter[str] = Counter()
     period_estimated_counts: Counter[str] = Counter()
+    weekday_two_hour_counts: Counter[tuple[int, int]] = Counter()
+    weekday_two_hour_confirmed_counts: Counter[tuple[int, int]] = Counter()
+    weekday_two_hour_estimated_counts: Counter[tuple[int, int]] = Counter()
+    weekday_two_hour_confirmed_count = 0
+    weekday_two_hour_estimated_count = 0
     weekday_pattern_keys: set[tuple[object, date]] = set()
     time_pattern_keys: set[tuple[object, date, str]] = set()
 
@@ -310,6 +352,18 @@ def build_posting_analytics(
             weekday_counts[weekday_date.weekday()] += 1
             weekday_pattern_keys.add((contributor_key, weekday_date))
 
+        weekday_two_hour_slot = _weekday_two_hour_slot(row, timezone)
+        if weekday_two_hour_slot is not None:
+            weekday, slot, slot_kind = weekday_two_hour_slot
+            cell_key = (slot, weekday)
+            weekday_two_hour_counts[cell_key] += 1
+            if slot_kind == "confirmed":
+                weekday_two_hour_confirmed_counts[cell_key] += 1
+                weekday_two_hour_confirmed_count += 1
+            else:
+                weekday_two_hour_estimated_counts[cell_key] += 1
+                weekday_two_hour_estimated_count += 1
+
         time_value, time_kind, period_label = _time_for_row(row, timezone)
         if time_value is None:
             continue
@@ -342,6 +396,72 @@ def build_posting_analytics(
     for hour, bar in enumerate(hour_bars):
         bar["hour"] = hour
         bar["label"] = f"{hour:02d}:00"
+
+    weekday_two_hour_eligible_count = (
+        weekday_two_hour_confirmed_count + weekday_two_hour_estimated_count
+    )
+    weekday_two_hour_max_count = max(weekday_two_hour_counts.values(), default=0)
+    weekday_two_hour_rows: list[dict[str, Any]] = []
+    for slot in range(TWO_HOUR_SLOT_COUNT):
+        start_hour = slot * TWO_HOUR_SLOT_SIZE
+        end_hour = start_hour + TWO_HOUR_SLOT_SIZE
+        cells: list[dict[str, Any]] = []
+        for weekday, weekday_label in enumerate(WEEKDAY_LABELS):
+            cell_key = (slot, weekday)
+            count = weekday_two_hour_counts[cell_key]
+            cells.append(
+                {
+                    "weekday": weekday,
+                    "weekday_label": weekday_label,
+                    "slot": slot,
+                    "count": count,
+                    "confirmed_count": weekday_two_hour_confirmed_counts[cell_key],
+                    "estimated_count": weekday_two_hour_estimated_counts[cell_key],
+                    "max_percent": (
+                        round(count * 100 / weekday_two_hour_max_count, 1)
+                        if weekday_two_hour_max_count else 0.0
+                    ),
+                    "strength": (
+                        0
+                        if count == 0 or weekday_two_hour_max_count == 0
+                        else max(
+                            1,
+                            min(
+                                4,
+                                (count * 4 + weekday_two_hour_max_count - 1)
+                                // weekday_two_hour_max_count,
+                            ),
+                        )
+                    ),
+                }
+            )
+        weekday_two_hour_rows.append(
+            {
+                "slot": slot,
+                "start_hour": start_hour,
+                "end_hour": end_hour,
+                "label": f"{start_hour:02d}:00–{end_hour - 1:02d}:59",
+                "count": sum(cell["count"] for cell in cells),
+                "cells": cells,
+            }
+        )
+
+    weekday_two_hour_heatmap = {
+        "weekdays": [
+            {
+                "weekday": weekday,
+                "label": label.removeprefix("星期"),
+                "full_label": label,
+            }
+            for weekday, label in enumerate(WEEKDAY_LABELS)
+        ],
+        "rows": weekday_two_hour_rows,
+        "eligible_count": weekday_two_hour_eligible_count,
+        "confirmed_count": weekday_two_hour_confirmed_count,
+        "estimated_count": weekday_two_hour_estimated_count,
+        "excluded_count": total_reviews - weekday_two_hour_eligible_count,
+        "max_count": weekday_two_hour_max_count,
+    }
 
     period_labels = [item[0] for item in PERIODS]
     period_bars = _make_bars(period_labels, period_counts, period_eligible_count)
@@ -456,6 +576,7 @@ def build_posting_analytics(
         },
         "weekday_bars": weekday_bars,
         "hour_bars": hour_bars,
+        "weekday_two_hour_heatmap": weekday_two_hour_heatmap,
         "period_bars": period_bars,
         "month_bars": month_bars,
         "cadence": cadence,

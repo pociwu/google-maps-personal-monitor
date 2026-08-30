@@ -174,6 +174,62 @@
             <div class="card-body">
               <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
                 <div>
+                  <h3 id="weekday-time-chart-title" class="h6 mb-1">星期 × 2 小時時段熱圖</h3>
+                  <p class="small text-body-secondary mb-2">
+                    X 軸是星期，Y 軸是台灣時間，每 2 小時一格；顏色越深代表發文越多。
+                  </p>
+                </div>
+                <span class="badge text-bg-secondary">
+                  納入 {{ analysis.weekday_two_hour_heatmap.eligible_count }} ·
+                  完整 {{ analysis.weekday_two_hour_heatmap.confirmed_count }} ·
+                  推算 {{ analysis.weekday_two_hour_heatmap.estimated_count }}
+                </span>
+              </div>
+              <p class="small text-body-secondary mb-2">
+                推算時間只有整個可信區間都落在同一個台灣日期、同一個 2 小時格時才納入；
+                {{ analysis.weekday_two_hour_heatmap.excluded_count }} 筆未納入此圖。
+              </p>
+              <p class="small text-body-secondary d-md-none mb-2">可左右滑動查看完整星期。</p>
+              <div class="weekday-time-scroll border rounded-3"
+                   role="region" aria-labelledby="weekday-time-chart-title" tabindex="0">
+                <table class="table weekday-time-heatmap mb-0" aria-labelledby="weekday-time-chart-title">
+                  <caption class="visually-hidden">
+                    發文時間熱圖，欄為星期一至星期日，列為每兩小時一個時段。
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th class="weekday-time-axis" scope="col">時段</th>
+                      {% for weekday in analysis.weekday_two_hour_heatmap.weekdays %}
+                      <th scope="col" title="{{ weekday.full_label }}"
+                          aria-label="{{ weekday.full_label }}">{{ weekday.label }}</th>
+                      {% endfor %}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for row in analysis.weekday_two_hour_heatmap.rows %}
+                    <tr>
+                      <th class="weekday-time-axis" scope="row">{{ row.label }}</th>
+                      {% for cell in row.cells %}
+                      <td class="weekday-time-cell hour-strength-{{ cell.strength }}"
+                          title="{{ cell.weekday_label }} {{ row.label }}：{{ cell.count }} 筆（完整 {{ cell.confirmed_count }}、推算 {{ cell.estimated_count }}）"
+                          aria-label="{{ cell.weekday_label }} {{ row.label }}：{{ cell.count }} 筆，完整 {{ cell.confirmed_count }}、推算 {{ cell.estimated_count }}">
+                        <strong>{{ cell.count }}</strong>
+                      </td>
+                      {% endfor %}
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <div class="col-12">
+          <article class="card analytics-chart-card">
+            <div class="card-body">
+              <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+                <div>
                   <h3 id="hour-chart-title" class="h6 mb-1">24 小時分布熱圖</h3>
                   <p class="small text-body-secondary mb-3">顏色越深代表該小時樣本越多；格內為筆數。</p>
                 </div>
@@ -268,7 +324,7 @@
               <th scope="col">店家</th>
               <th scope="col">發文時間</th>
               <th scope="col">可信度／誤差</th>
-              <th scope="col">時段圖</th>
+              <th scope="col">24 小時圖</th>
               <th scope="col">狀態</th>
               <th scope="col">證據</th>
             </tr>
