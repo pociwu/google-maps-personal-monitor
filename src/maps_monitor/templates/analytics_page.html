@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="zh-Hant" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>發文時間分析 · Google Maps 個人評論監控</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB"
+        crossorigin="anonymous">
+  <link rel="stylesheet" href="/static/dashboard.css">
+  <script src="/static/theme.js"></script>
+</head>
+<body>
+  <header class="border-bottom bg-body sticky-top">
+    <div class="container py-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
+      <div>
+        <h1 class="h4 mb-1">發文時間分析</h1>
+        <p class="text-body-secondary mb-0 small">
+          Google Maps 個人評論監控 · 版本 v{{ app_version }}
+        </p>
+      </div>
+      <a class="btn btn-outline-secondary btn-sm" href="/">返回評論首頁</a>
+    </div>
+  </header>
+
+  <main class="container py-4">
+    <section aria-labelledby="scope-heading">
+      <div class="row g-3 align-items-end">
+        <div class="col-12 col-lg-6">
+          <h2 id="scope-heading" class="h5 mb-2">分析對象</h2>
+          <form method="get" action="/analytics">
+            <label class="form-label" for="analytics-target">貢獻者</label>
+            <div class="input-group">
+              <select class="form-select" id="analytics-target" name="target">
+                <option value="" {% if not selected_target_id %}selected{% endif %}>全部貢獻者（只作總覽）</option>
+                {% for person in contributors %}
+                <option value="{{ person.id }}" {% if selected_target_id == person.id %}selected{% endif %}>
+                  {{ person.name }}
+                </option>
+                {% endfor %}
+              </select>
+              <button class="btn btn-primary" type="submit">查看</button>
+            </div>
+          </form>
+        </div>
+        <div class="col-12 col-lg-6">
+          <p class="text-body-secondary mb-0">
+            目前顯示：<strong class="text-body">{{ selected_name }}</strong>。有效及已刪除評論都會保留在歷史分析中。
+          </p>
+        </div>
+      </div>
+      <div class="alert alert-secondary analytics-note mt-3 mb-0">
+        24 小時圖只使用 Google 完整時間，以及誤差半徑不超過 3 小時的窄區間推算。
+        推算資料以區間中點放入圖中，仍不是 Google 精確時間；只有日期的評論不會被硬塞進時段圖。
+      </div>
+    </section>
+
+    <section class="mt-4" aria-labelledby="quality-heading">
+      <h2 id="quality-heading" class="h5 mb-3">資料品質</h2>
+      <div class="row g-3">
+        <div class="col-6 col-lg-3">
+          <article class="card analytics-summary-card h-100">
+            <div class="card-body">
+              <p class="small text-body-secondary mb-1">收錄評論</p>
+              <p class="display-6 analytics-summary-value mb-0">{{ analysis.total_reviews }}</p>
+              <span class="small text-body-secondary">含歷史已刪除資料</span>
+            </div>
+          </article>
+        </div>
+        <div class="col-6 col-lg-3">
+          <article class="card analytics-summary-card h-100">
+            <div class="card-body">
+              <p class="small text-body-secondary mb-1">可用日期</p>
+              <p class="display-6 analytics-summary-value mb-0">{{ analysis.dated_count }}</p>
+              <span class="small text-body-secondary">星期可用 {{ analysis.weekday_eligible_count }}</span>
+            </div>
+          </article>
+        </div>
+        <div class="col-6 col-lg-3">
+          <article class="card analytics-summary-card h-100">
+            <div class="card-body">
+              <p class="small text-body-secondary mb-1">可用時段</p>
+              <p class="display-6 analytics-summary-value mb-0">{{ analysis.time_eligible_count }}</p>
+              <span class="small text-body-secondary">時段未納入 {{ analysis.excluded_time_count }}</span>
+            </div>
+          </article>
+        </div>
+        <div class="col-6 col-lg-3">
+          <article class="card analytics-summary-card h-100">
+            <div class="card-body">
+              <p class="small text-body-secondary mb-1">Google 完整時間</p>
+              <p class="display-6 analytics-summary-value mb-0">{{ analysis.confirmed_time_count }}</p>
+              <span class="small text-body-secondary">另有窄區間推算 {{ analysis.estimated_time_count }}</span>
+            </div>
+          </article>
+        </div>
+      </div>
+      {% if analysis.excluded_edit_count or analysis.unrecoverable_count %}
+      <p class="small text-body-secondary mt-2 mb-0">
+        未納入日期／時段統計：只有修改時間證據 {{ analysis.excluded_edit_count }} 筆；
+        發文時間無法復原 {{ analysis.unrecoverable_count }} 筆。這些評論仍保留在下方明細。
+      </p>
+      {% endif %}
+    </section>
+
+    <section class="mt-4" aria-labelledby="findings-heading">
+      <article class="card analytics-findings">
+        <div class="card-body">
+          <h2 id="findings-heading" class="h5">是否看得出規律？</h2>
+          {% if not selected_target_id %}
+          <p class="mb-0">
+            全部貢獻者的圖只供總覽，不把不同人物合併判定共同規律。請選擇單一貢獻者後查看判斷。
+          </p>
+          {% else %}
+          <ul class="mb-0">
+            {% for finding in analysis.findings %}<li>{{ finding }}</li>{% endfor %}
+          </ul>
+          {% endif %}
+        </div>
+      </article>
+    </section>
+
+    <section class="mt-4" aria-labelledby="charts-heading">
+      <h2 id="charts-heading" class="h5 mb-3">分布圖</h2>
+      <div class="row g-3">
+        <div class="col-12 col-xl-6">
+          <article class="card analytics-chart-card">
+            <div class="card-body">
+              <h3 class="h6">星期分布</h3>
+              <p class="small text-body-secondary">只納入能落在單一台灣日期的評論。</p>
+              <div class="distribution-list">
+                {% for item in analysis.weekday_bars %}
+                <div class="distribution-row">
+                  <span>{{ item.label }}</span>
+                  <progress class="distribution-progress" value="{{ item.percent }}" max="100"
+                            aria-label="{{ item.label }} {{ item.count }} 筆"></progress>
+                  <span class="distribution-count">{{ item.count }} 筆 · {{ item.percent }}%</span>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <div class="col-12 col-xl-6">
+          <article class="card analytics-chart-card">
+            <div class="card-body">
+              <h3 class="h6">四個時段</h3>
+              <p class="small text-body-secondary">
+                {{ analysis.period_eligible_count }} 筆可明確落在單一時段；
+                另有 {{ analysis.excluded_period_count }} 筆窄區間跨越時段邊界，不強制歸類。
+              </p>
+              <div class="distribution-list">
+                {% for item in analysis.period_bars %}
+                <div class="distribution-row">
+                  <span>{{ item.label }}<br><small class="text-body-secondary">{{ item.range }}</small></span>
+                  <progress class="distribution-progress" value="{{ item.percent }}" max="100"
+                            aria-label="{{ item.label }} {{ item.count }} 筆"></progress>
+                  <span class="distribution-count">
+                    {{ item.count }} 筆 · {{ item.percent }}%<br>
+                    <small class="text-body-secondary">完整 {{ item.confirmed_count }} · 推算 {{ item.estimated_count }}</small>
+                  </span>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <div class="col-12">
+          <article class="card analytics-chart-card">
+            <div class="card-body">
+              <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+                <div>
+                  <h3 id="hour-chart-title" class="h6 mb-1">24 小時分布熱圖</h3>
+                  <p class="small text-body-secondary mb-3">顏色越深代表該小時樣本越多；格內為筆數。</p>
+                </div>
+                <span class="badge text-bg-secondary">
+                  完整 {{ analysis.confirmed_time_count }} · 推算 {{ analysis.estimated_time_count }}
+                </span>
+              </div>
+              <div class="hour-heatmap" aria-labelledby="hour-chart-title">
+                {% for item in analysis.hour_bars %}
+                <div class="hour-cell hour-strength-{{ item.strength }}"
+                     title="{{ item.label }}：{{ item.count }} 筆"
+                     aria-label="{{ item.label }}：{{ item.count }} 筆">
+                  <strong>{{ item.count }}</strong>
+                  <small>{{ '%02d'|format(item.hour) }}時</small>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <div class="col-12">
+          <article class="card analytics-chart-card">
+            <div class="card-body">
+              <h3 class="h6">月份時間軸</h3>
+              <p class="small text-body-secondary">
+                顯示目前資料庫捕捉到的評論月份；確認日期與推算日期分開列出數量。
+              </p>
+              {% if analysis.month_bars %}
+              <div class="distribution-list">
+                {% for item in analysis.month_bars %}
+                <div class="distribution-row">
+                  <span>{{ item.label }}</span>
+                  <progress class="distribution-progress" value="{{ item.percent }}" max="100"
+                            aria-label="{{ item.label }} {{ item.count }} 筆"></progress>
+                  <span class="distribution-count">
+                    {{ item.count }} 筆<br>
+                    <small class="text-body-secondary">確認 {{ item.confirmed_count }} · 推算 {{ item.estimated_count }}</small>
+                  </span>
+                </div>
+                {% endfor %}
+              </div>
+              {% else %}
+              <p class="text-body-secondary mb-0">目前沒有可用日期。</p>
+              {% endif %}
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="mt-4" aria-labelledby="cadence-heading">
+      <article class="card">
+        <div class="card-body">
+          <h2 id="cadence-heading" class="h5">發文間隔</h2>
+          {% if selected_target_id %}
+          <p class="mb-1">{{ analysis.cadence.text }}</p>
+          <p class="small text-body-secondary mb-0">
+            間隔分析使用 {{ analysis.cadence.sample_count }} 個可確定日期、{{ analysis.cadence.gap_count }} 個相鄰間隔。
+            同日連續評論、監控開始前遺漏與已不可見資料都可能影響結果。
+          </p>
+          {% if analysis.cadence.iqr_days is not none %}
+          <p class="small text-body-secondary mt-1 mb-0">
+            IQR {{ analysis.cadence.iqr_days }} 日 ·
+            {{ analysis.cadence.within_tolerance_percent }}% 的間隔接近中位數 ·
+            前後期中位數差 {{ analysis.cadence.split_median_difference_percent }}%。
+          </p>
+          {% endif %}
+          {% else %}
+          <p class="mb-0">不同人物不能合併計算發文間隔；請先選擇單一貢獻者。</p>
+          {% endif %}
+        </div>
+      </article>
+    </section>
+
+    <section class="mt-4" aria-labelledby="details-heading">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <h2 id="details-heading" class="h5 mb-0">發文時間明細</h2>
+        <span class="badge text-bg-secondary">顯示 {{ review_times|length }}／{{ detail_total }} 筆</span>
+      </div>
+      {% if detail_truncated %}
+      <div class="alert alert-secondary small">
+        明細為避免手機頁面過大，只顯示最近 100 筆；圖表與規律判斷仍使用全部 {{ detail_total }} 筆資料。
+      </div>
+      {% endif %}
+      {% if review_times %}
+      <div class="table-responsive border rounded-3">
+        <table class="table table-striped table-hover analytics-table mb-0">
+          <thead>
+            <tr>
+              <th scope="col">貢獻者</th>
+              <th scope="col">店家</th>
+              <th scope="col">發文時間</th>
+              <th scope="col">可信度／誤差</th>
+              <th scope="col">時段圖</th>
+              <th scope="col">狀態</th>
+              <th scope="col">證據</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in review_times %}
+            <tr>
+              <td>{{ item.contributor_name }}</td>
+              <td>{{ item.place_name }}</td>
+              <td>
+                <span class="text-nowrap">{{ item.publish_text }}</span><br>
+                <small class="text-body-secondary">Google：{{ item.relative_time or '未知' }}</small>
+              </td>
+              <td>{{ item.confidence_text }}<br><small class="text-body-secondary">{{ item.precision_text }}</small></td>
+              <td>
+                {% if item.included_in_hour_chart %}
+                <span class="badge text-bg-success">已納入</span>
+                {% else %}
+                <span class="badge text-bg-secondary">未納入</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if item.status == 'deleted' %}
+                <span class="badge text-bg-danger">已刪除</span>
+                {% else %}
+                <span class="badge text-bg-success">有效</span>
+                {% endif %}
+              </td>
+              <td><a class="btn btn-outline-secondary btn-sm" href="{{ item.evidence_url }}">查看</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="alert alert-secondary">目前沒有可分析的評論資料。</div>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

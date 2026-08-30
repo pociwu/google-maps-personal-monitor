@@ -21,7 +21,10 @@
           公開貢獻者評論的唯讀觀察資料 · 版本 v{{ app_version }}
         </p>
       </div>
-      <a class="btn btn-outline-secondary btn-sm" href="{{ all_href }}">重新整理</a>
+      <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-outline-primary btn-sm" href="/analytics">發文時間分析</a>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ all_href }}">重新整理</a>
+      </div>
     </div>
   </header>
 
@@ -126,6 +129,7 @@
             <div class="mt-3 d-flex justify-content-between align-items-center gap-2">
               <div class="d-flex flex-wrap gap-2">
                 <a class="btn btn-outline-primary btn-sm" href="{{ person.href }}">查看</a>
+                <a class="btn btn-outline-info btn-sm" href="{{ person.analytics_url }}">發文時間</a>
                 <a class="btn btn-outline-secondary btn-sm" href="{{ person.url }}"
                    target="_blank" rel="noopener noreferrer">個人頁面</a>
               </div>

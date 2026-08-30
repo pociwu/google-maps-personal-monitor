@@ -219,6 +219,110 @@ def test_evidence_is_a_standalone_page_without_javascript(tmp_path, monkeypatch)
     assert "返回評論首頁" in evidence.text
 
 
+def test_posting_time_analytics_page_separates_exact_and_estimated_samples(
+    tmp_path, monkeypatch
+):
+    database_path, image_root, _digest = _seed(tmp_path)
+    database = Database(database_path)
+    database.connection.execute(
+        """UPDATE reviews SET
+        publish_estimate='2026-07-28T03:04:00+00:00',
+        publish_earliest='2026-07-28T03:04:00+00:00',
+        publish_latest='2026-07-28T03:04:00+00:00',
+        confidence='confirmed_time',time_subject='publish_time'
+        WHERE id=1"""
+    )
+    database.connection.execute(
+        """UPDATE reviews SET
+        publish_estimate='2025-07-30T08:36:00+00:00',
+        publish_earliest='2025-07-30T06:21:00+00:00',
+        publish_latest='2025-07-30T10:51:00+00:00',
+        confidence='high_estimate',time_subject='publish_time'
+        WHERE id=2"""
+    )
+    database.connection.execute(
+        """UPDATE reviews SET
+        publish_estimate='2024-07-30T08:00:00+00:00',
+        publish_earliest='2024-07-30T07:00:00+00:00',
+        publish_latest='2024-07-30T09:00:00+00:00',
+        confidence='high_estimate',time_subject='last_edit'
+        WHERE id=3"""
+    )
+    database.connection.commit()
+    database.close()
+
+    client = _client(monkeypatch, database_path, image_root)
+    dashboard = client.get("/")
+    assert 'href="/analytics"' in dashboard.text
+    assert 'href="/analytics?target=1"' in dashboard.text
+
+    overview = client.get("/analytics")
+    assert overview.status_code == 200
+    assert "發文時間分析" in overview.text
+    assert "全部貢獻者的圖只供總覽" in overview.text
+    assert "不同人物不能合併計算發文間隔" in overview.text
+
+    selected = client.get("/analytics?target=1")
+    assert selected.status_code == 200
+    assert "目前顯示：<strong class=\"text-body\">測試貢獻者</strong>" in selected.text
+    assert "Google 完整時間" in selected.text
+    assert "約 2025-07-30 16:36" in selected.text
+    assert "2026-07-28 11:04" in selected.text
+    assert 'title="11:00：1 筆"' in selected.text
+    assert 'title="16:00：1 筆"' in selected.text
+    assert "完整 1 · 推算 1" in selected.text
+    assert "只有日期的評論不會被硬塞進時段圖" in selected.text
+    assert "只有修改時間證據 1 筆" in selected.text
+    assert "已刪除店家" in selected.text
+    assert "不納入發文分析" in selected.text
+    assert 'role="img"' not in selected.text
+    assert "chart.js" not in selected.text.lower()
+
+    invalid_target = client.get("/analytics?target=999")
+    assert invalid_target.status_code == 200
+    assert "全部貢獻者的圖只供總覽" in invalid_target.text
+
+
+def test_posting_time_detail_is_capped_but_analysis_keeps_all_rows(
+    tmp_path, monkeypatch
+):
+    database_path, image_root, _digest = _seed(tmp_path)
+    database = Database(database_path)
+    target_id = database.connection.execute("SELECT id FROM targets LIMIT 1").fetchone()[0]
+    now = "2026-07-30T00:00:00+00:00"
+    database.connection.executemany(
+        """INSERT INTO reviews
+        (target_id,review_key,place_name,rating,body,relative_time,publish_date,
+         confidence,content_hash,status,first_seen_at,last_seen_at)
+        VALUES(?,?,?,?,?,?,?,?,?,'active',?,?)""",
+        [
+            (
+                target_id,
+                f"extra-{index}",
+                f"額外店家 {index}",
+                5,
+                "測試",
+                "1 年前",
+                "2025-07-30",
+                "estimate",
+                f"extra-hash-{index}",
+                now,
+                now,
+            )
+            for index in range(100)
+        ],
+    )
+    database.connection.commit()
+    database.close()
+
+    client = _client(monkeypatch, database_path, image_root)
+    response = client.get(f"/analytics?target={target_id}")
+
+    assert response.status_code == 200
+    assert "顯示 100／103 筆" in response.text
+    assert "圖表與規律判斷仍使用全部 103 筆資料" in response.text
+
+
 def test_media_is_database_addressed_and_path_safe(tmp_path, monkeypatch):
     database_path, image_root, digest = _seed(tmp_path)
     client = _client(monkeypatch, database_path, image_root)
@@ -253,6 +357,7 @@ def test_health_and_safe_unavailable_page(tmp_path, monkeypatch):
     assert response.status_code == 503
     assert "資料暫時無法使用" in response.text
     assert str(tmp_path) not in response.text
+    assert missing_client.get("/analytics").status_code == 503
 
     corrupt = tmp_path / "corrupt.sqlite3"
     corrupt.write_text("not a sqlite database", encoding="utf-8")

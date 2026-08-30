@@ -28,6 +28,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .dates import normalize_relative_label
+from .posting_analytics import build_posting_analytics
 from .target_admin import (
     TargetAdminError,
     add_target,
@@ -227,6 +228,145 @@ def _maps_search_url(place_name: str) -> str:
     )
 
 
+def _ordered_targets(connection: sqlite3.Connection) -> list[sqlite3.Row]:
+    rows = connection.execute(
+        """SELECT id,name,url,last_success_at,avatar_path
+        FROM targets WHERE enabled=1 ORDER BY name"""
+    ).fetchall()
+    try:
+        configured_order = {
+            url: index
+            for index, url in enumerate(target_urls_in_order(TARGETS_CONFIG_PATH))
+        }
+    except TargetAdminError:
+        configured_order = {}
+    return sorted(
+        rows,
+        key=lambda row: (
+            configured_order.get(row["url"], len(configured_order)),
+            row["name"],
+        ),
+    )
+
+
+def _analytics_time_detail(review: dict) -> dict:
+    uncertainty_seconds = _uncertainty_seconds(
+        review.get("publish_estimate"),
+        review.get("publish_earliest"),
+        review.get("publish_latest"),
+    )
+    confidence = review.get("confidence")
+    time_subject = review.get("time_subject")
+    estimate = review.get("publish_estimate")
+    if time_subject == "last_edit":
+        publish_text = "尚未確認"
+    elif estimate and confidence == "confirmed_time":
+        publish_text = _local_datetime(str(estimate))
+    elif (
+        estimate
+        and confidence != "unrecoverable"
+        and uncertainty_seconds is not None
+        and uncertainty_seconds < 86400
+    ):
+        publish_text = f"約 {_local_datetime(str(estimate))}"
+    else:
+        date_value = str(review.get("publish_date") or "尚未確認")
+        publish_text = (
+            date_value
+            if confidence in CONFIRMED_CONFIDENCE or date_value == "尚未確認"
+            else f"約 {date_value}"
+        )
+    confidence_text = {
+        "confirmed_time": "完整時間已確認",
+        "confirmed_date": "日期已確認",
+        "high_estimate": "高可信推算",
+        "estimate": "區間推算",
+        "unrecoverable": "無法復原",
+    }.get(str(confidence), "推算")
+    if time_subject == "last_edit":
+        confidence_text = "只有修改時間證據"
+        precision_text = "不納入發文分析"
+    elif confidence == "confirmed_time":
+        precision_text = "精確到秒（圖表顯示到分）"
+    else:
+        precision_text = _uncertainty_text(uncertainty_seconds) or "只有日期"
+    return review | {
+        "publish_text": publish_text,
+        "confidence_text": confidence_text,
+        "precision_text": precision_text,
+        "included_in_hour_chart": bool(
+            estimate
+            and time_subject != "last_edit"
+            and confidence != "unrecoverable"
+            and (
+                confidence == "confirmed_time"
+                or (
+                    uncertainty_seconds is not None
+                    and uncertainty_seconds <= 3 * 3600
+                )
+            )
+        ),
+        "evidence_url": f"/reviews/{review['id']}/evidence",
+    }
+
+
+def _analytics_data(request: Request) -> dict:
+    requested_target_id = max(0, _safe_int(request.query_params.get("target"), 0))
+    with _read_connection() as connection:
+        target_rows = _ordered_targets(connection)
+        valid_target_ids = {int(row["id"]) for row in target_rows}
+        target_id = requested_target_id if requested_target_id in valid_target_ids else 0
+        values: tuple[object, ...] = ()
+        target_filter = ""
+        if target_id:
+            target_filter = "AND t.id=?"
+            values = (target_id,)
+        reviews = [
+            dict(row)
+            for row in connection.execute(
+                f"""SELECT r.id,r.target_id,t.name AS contributor_name,r.place_name,
+                r.publish_date,r.publish_estimate,r.publish_earliest,r.publish_latest,
+                r.precision,r.confidence,r.basis,r.time_subject,r.status,r.relative_time
+                FROM reviews r JOIN targets t ON t.id=r.target_id
+                WHERE t.enabled=1 {target_filter}
+                ORDER BY COALESCE(r.publish_estimate,r.publish_date) DESC,r.id DESC""",
+                values,
+            ).fetchall()
+        ]
+
+    contributors = []
+    for row in target_rows:
+        item = dict(row)
+        item["avatar_url"] = f"/avatars/{item['id']}" if item["avatar_path"] else None
+        item["analytics_url"] = f"/analytics?{urlencode({'target': item['id']})}"
+        contributors.append(item)
+    selected = next(
+        (item for item in contributors if int(item["id"]) == target_id),
+        None,
+    )
+    analysis = build_posting_analytics(reviews, timezone=DISPLAY_TIMEZONE)
+    max_hour_count = max(
+        (int(item["count"]) for item in analysis["hour_bars"]),
+        default=0,
+    )
+    for item in analysis["hour_bars"]:
+        count = int(item["count"])
+        item["strength"] = (
+            0 if count == 0 or max_hour_count == 0
+            else max(1, min(4, math.ceil(count * 4 / max_hour_count)))
+        )
+    return {
+        "app_version": APP_VERSION,
+        "contributors": contributors,
+        "selected_target_id": target_id,
+        "selected_name": selected["name"] if selected else "全部貢獻者",
+        "analysis": analysis,
+        "review_times": [_analytics_time_detail(review) for review in reviews[:100]],
+        "detail_total": len(reviews),
+        "detail_truncated": len(reviews) > 100,
+    }
+
+
 def _dashboard_data(request: Request) -> dict:
     query = request.query_params
     contributor = query.get("contributor", "").strip()[:200]
@@ -353,6 +493,7 @@ def _dashboard_data(request: Request) -> dict:
         item["last_success_text"] = _local_datetime(item["last_success_at"])
         item["freshness"] = _freshness(item["last_success_at"])
         item["href"] = _query_url(params, contributor=item["name"], page=1)
+        item["analytics_url"] = f"/analytics?{urlencode({'target': item['id']})}"
         item["avatar_url"] = f"/avatars/{item['id']}" if item["avatar_path"] else None
         level = item["local_guide_level"]
         points = item["local_guide_points"]
@@ -671,6 +812,13 @@ def create_app() -> FastAPI:
     def dashboard(request: Request):
         try:
             return _render("dashboard.html", _dashboard_data(request))
+        except sqlite3.Error:
+            return _render("unavailable.html", {}, status_code=503)
+
+    @application.get("/analytics", response_class=HTMLResponse)
+    def posting_analytics(request: Request):
+        try:
+            return _render("analytics_page.html", _analytics_data(request))
         except sqlite3.Error:
             return _render("unavailable.html", {}, status_code=503)
 
