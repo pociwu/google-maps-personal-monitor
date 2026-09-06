@@ -258,6 +258,7 @@ def _analytics_time_detail(review: dict) -> dict:
     confidence = review.get("confidence")
     time_subject = review.get("time_subject")
     estimate = review.get("publish_estimate")
+    hour_precision = review.get("precision") in {"minute", "hour"}
     if time_subject == "last_edit":
         publish_text = "尚未確認"
     elif estimate and confidence == "confirmed_time":
@@ -266,7 +267,8 @@ def _analytics_time_detail(review: dict) -> dict:
         estimate
         and confidence != "unrecoverable"
         and uncertainty_seconds is not None
-        and uncertainty_seconds < 86400
+        and hour_precision
+        and uncertainty_seconds <= 30 * 60
     ):
         publish_text = f"約 {_local_datetime(str(estimate))}"
     else:
@@ -289,7 +291,11 @@ def _analytics_time_detail(review: dict) -> dict:
     elif confidence == "confirmed_time":
         precision_text = "精確到秒（圖表顯示到分）"
     else:
-        precision_text = _uncertainty_text(uncertainty_seconds) or "只有日期"
+        precision_text = (
+            _uncertainty_text(uncertainty_seconds)
+            if hour_precision and uncertainty_seconds is not None
+            else "只有日期"
+        )
     return review | {
         "publish_text": publish_text,
         "confidence_text": confidence_text,
@@ -301,8 +307,9 @@ def _analytics_time_detail(review: dict) -> dict:
             and (
                 confidence == "confirmed_time"
                 or (
-                    uncertainty_seconds is not None
-                    and uncertainty_seconds <= 3 * 3600
+                    hour_precision
+                    and uncertainty_seconds is not None
+                    and uncertainty_seconds <= 30 * 60
                 )
             )
         ),
@@ -326,7 +333,8 @@ def _analytics_data(request: Request) -> dict:
             for row in connection.execute(
                 f"""SELECT r.id,r.target_id,t.name AS contributor_name,r.place_name,
                 r.publish_date,r.publish_estimate,r.publish_earliest,r.publish_latest,
-                r.precision,r.confidence,r.basis,r.time_subject,r.status,r.relative_time
+                r.precision,r.confidence,r.basis,r.time_subject,r.status,r.relative_time,
+                r.date_model_version
                 FROM reviews r JOIN targets t ON t.id=r.target_id
                 WHERE t.enabled=1 {target_filter}
                 ORDER BY COALESCE(r.publish_estimate,r.publish_date) DESC,r.id DESC""",
@@ -448,7 +456,7 @@ def _dashboard_data(request: Request) -> dict:
             for row in connection.execute(
                 f"""SELECT r.id,t.name AS contributor_name,r.place_name,r.rating,r.body,
                 r.publish_date,r.publish_estimate,r.publish_earliest,r.publish_latest,
-                r.confidence,r.edit_date,r.edit_confidence,r.status,
+                r.precision,r.confidence,r.edit_date,r.edit_confidence,r.status,
                 r.modified_at,r.last_seen_at,r.relative_time,r.review_url,r.place_url,
                 (SELECT COUNT(*) FROM review_versions rv WHERE rv.review_id=r.id)
                     AS version_count
@@ -530,8 +538,34 @@ def _dashboard_data(request: Request) -> dict:
             review["publish_latest"],
         )
         publish_value = review["publish_date"]
-        if (
-            review["confidence"] not in CONFIRMED_CONFIDENCE
+        publish_label = "發表日期"
+        display_confidence = review["confidence"]
+        declared_hour_precision = review["precision"] in {"minute", "hour"}
+        display_uncertainty = (
+            _uncertainty_text(uncertainty_seconds)
+            if declared_hour_precision
+            or uncertainty_seconds is None
+            or uncertainty_seconds >= 86400
+            else None
+        )
+        if review["confidence"] == "confirmed_time" and review["publish_estimate"]:
+            publish_value = _local_datetime(review["publish_estimate"])
+            publish_label = "發表時間"
+            display_uncertainty = None
+        elif (
+            review["publish_estimate"]
+            and declared_hour_precision
+            and uncertainty_seconds is not None
+            and uncertainty_seconds <= 30 * 60
+        ):
+            publish_value = _local_datetime(review["publish_estimate"])
+            publish_label = "發表時間"
+            # A transition midpoint remains an estimate even when its calendar
+            # date is confirmed. Keep the uncertainty visible and explicit.
+            display_confidence = "high_estimate"
+        elif (
+            declared_hour_precision
+            and review["confidence"] not in CONFIRMED_CONFIDENCE
             and uncertainty_seconds is not None
             and uncertainty_seconds < 86400
             and review["publish_estimate"]
@@ -539,9 +573,9 @@ def _dashboard_data(request: Request) -> dict:
             publish_value = _local_datetime(review["publish_estimate"])
         review["publish_text"] = _display_date(
             publish_value,
-            review["confidence"],
-            "發表日期",
-            _uncertainty_text(uncertainty_seconds),
+            display_confidence,
+            publish_label,
+            display_uncertainty,
         )
         review["edit_text"] = _display_date(
             review["edit_date"], review["edit_confidence"], "最後修改"

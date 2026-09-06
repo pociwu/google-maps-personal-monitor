@@ -58,8 +58,9 @@ def test_only_narrow_estimates_are_used_for_hour_chart():
         {
             "publish_date": "2026-08-03",
             "publish_estimate": "2026-08-03T03:00:00+00:00",
-            "publish_earliest": "2026-08-03T01:00:00+00:00",
-            "publish_latest": "2026-08-03T05:00:00+00:00",
+            "publish_earliest": "2026-08-03T02:30:00+00:00",
+            "publish_latest": "2026-08-03T03:30:00+00:00",
+            "precision": "hour",
             "confidence": "high_estimate",
             "status": "active",
         },
@@ -68,6 +69,7 @@ def test_only_narrow_estimates_are_used_for_hour_chart():
             "publish_estimate": "2026-08-04T04:00:00+00:00",
             "publish_earliest": "2026-08-04T00:00:00+00:00",
             "publish_latest": "2026-08-04T08:00:00+00:00",
+            "precision": "date",
             "confidence": "high_estimate",
             "status": "active",
         },
@@ -79,8 +81,9 @@ def test_only_narrow_estimates_are_used_for_hour_chart():
         {
             "publish_date": "2026-08-06",
             "publish_estimate": "2026-08-06T15:00:00+00:00",
-            "publish_earliest": "2026-08-06T14:00:00+00:00",
-            "publish_latest": "2026-08-06T17:00:00+00:00",
+            "publish_earliest": "2026-08-06T14:30:00+00:00",
+            "publish_latest": "2026-08-06T15:30:00+00:00",
+            "precision": "hour",
             "confidence": "estimate",
             "status": "active",
         },
@@ -91,10 +94,12 @@ def test_only_narrow_estimates_are_used_for_hour_chart():
     assert result["dated_count"] == 4
     assert result["confirmed_date_count"] == 0
     assert result["estimated_date_count"] == 4
-    assert result["weekday_eligible_count"] == 2
+    # The wide interval still stays on one Taiwan calendar date, so it is
+    # usable for weekday statistics even though it is excluded from time charts.
+    assert result["weekday_eligible_count"] == 3
     assert result["time_eligible_count"] == 2
-    assert result["period_eligible_count"] == 0
-    assert result["excluded_period_count"] == 2
+    assert result["period_eligible_count"] == 2
+    assert result["excluded_period_count"] == 0
     assert result["estimated_time_count"] == 2
     assert result["excluded_time_count"] == 2
     assert result["hour_bars"][11]["count"] == 1
@@ -112,6 +117,7 @@ def test_estimated_period_requires_the_whole_interval_to_stay_in_one_period():
             "publish_estimate": "2026-08-03T05:00:00+00:00",
             "publish_earliest": "2026-08-03T04:30:00+00:00",
             "publish_latest": "2026-08-03T05:30:00+00:00",
+            "precision": "hour",
             "confidence": "high_estimate",
             "status": "active",
         }
@@ -303,6 +309,7 @@ def test_weekday_two_hour_heatmap_only_accepts_estimates_inside_one_cell():
             "publish_estimate": "2026-08-03T01:00:00+00:00",
             "publish_earliest": "2026-08-03T00:30:00+00:00",
             "publish_latest": "2026-08-03T01:30:00+00:00",
+            "precision": "hour",
             "confidence": "high_estimate",
             "status": "active",
         },
@@ -311,6 +318,7 @@ def test_weekday_two_hour_heatmap_only_accepts_estimates_inside_one_cell():
             "publish_estimate": "2026-08-03T02:00:00+00:00",
             "publish_earliest": "2026-08-03T01:30:00+00:00",
             "publish_latest": "2026-08-03T02:30:00+00:00",
+            "precision": "hour",
             "confidence": "high_estimate",
             "status": "active",
         },
@@ -319,6 +327,7 @@ def test_weekday_two_hour_heatmap_only_accepts_estimates_inside_one_cell():
             "publish_estimate": "2026-08-03T16:00:00+00:00",
             "publish_earliest": "2026-08-03T15:30:00+00:00",
             "publish_latest": "2026-08-03T16:30:00+00:00",
+            "precision": "hour",
             "confidence": "high_estimate",
             "status": "active",
         },
@@ -375,3 +384,38 @@ def test_empty_weekday_two_hour_heatmap_still_contains_all_cells():
         for row in heatmap["rows"]
         for cell in row["cells"]
     )
+
+
+def test_time_chart_requires_trusted_precision_and_at_most_one_hour_total():
+    rows = [
+        {
+            "publish_date": "2026-08-03",
+            "publish_estimate": "2026-08-03T03:30:00+00:00",
+            "publish_earliest": "2026-08-03T03:00:00+00:00",
+            "publish_latest": "2026-08-03T04:00:00+00:00",
+            "precision": "hour",
+            "confidence": "high_estimate",
+        },
+        {
+            "publish_date": "2026-08-04",
+            "publish_estimate": "2026-08-04T03:30:00.500000+00:00",
+            "publish_earliest": "2026-08-04T03:00:00+00:00",
+            "publish_latest": "2026-08-04T04:00:01+00:00",
+            "precision": "hour",
+            "confidence": "high_estimate",
+        },
+        {
+            "publish_date": "2026-08-05",
+            "publish_estimate": "2026-08-05T03:15:00+00:00",
+            "publish_earliest": "2026-08-05T03:00:00+00:00",
+            "publish_latest": "2026-08-05T03:30:00+00:00",
+            "precision": "date",
+            "confidence": "high_estimate",
+        },
+    ]
+
+    result = build_posting_analytics(rows)
+
+    assert result["time_eligible_count"] == 1
+    assert result["estimated_time_count"] == 1
+    assert result["excluded_time_count"] == 2

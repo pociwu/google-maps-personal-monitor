@@ -19,6 +19,8 @@ from .util import iso_now, parse_iso, stable_hash
 
 
 CONFIRMED = {"confirmed_time", "confirmed_date"}
+DENSE_INTERVAL_MINUTES = (20, 30)
+DENSE_PRECISION_TARGET = timedelta(hours=1)
 
 
 def _models(con: sqlite3.Connection) -> dict[str, tuple[str, str]]:
@@ -64,9 +66,35 @@ def _date_event_needed(old: sqlite3.Row | None, assessment: DateAssessment, time
     old_date = old["edit_date"] if assessment.time_subject == "last_edit" else old["publish_date"]
     new_date = assessment.estimate_date(timezone)
     confidence_upgrade = old["confidence"] not in CONFIRMED and assessment.confidence in CONFIRMED
+    exact_time_upgrade = (
+        assessment.confidence == "confirmed_time"
+        and old["confidence"] != "confirmed_time"
+    )
+    new_width = (
+        assessment.latest - assessment.earliest
+        if assessment.earliest and assessment.latest else None
+    )
+    prefix = "edit" if assessment.time_subject == "last_edit" else "publish"
+    try:
+        old_earliest = old[f"{prefix}_earliest"]
+        old_latest = old[f"{prefix}_latest"]
+    except (KeyError, IndexError):
+        old_earliest = old_latest = None
+    old_width = (
+        parse_iso(old_latest) - parse_iso(old_earliest)
+        if old_earliest and old_latest else None
+    )
+    hour_precision_upgrade = bool(
+        assessment.time_subject == "publish_time"
+        and new_width is not None
+        and new_width <= DENSE_PRECISION_TARGET
+        and (old_width is None or old_width > DENSE_PRECISION_TARGET)
+    )
     return bool(
         old_date != new_date
         or confidence_upgrade
+        or exact_time_upgrade
+        or hour_precision_upgrade
         or old["time_subject"] != assessment.time_subject
         or (old["date_model_version"] or "") != (assessment.model_version or "")
     )
@@ -100,7 +128,8 @@ def _insert_date_event(
         payload["edit_date"] = payload.pop("publish_date")
     signature = stable_hash([
         review_id, payload.get("publish_date") or payload.get("edit_date"), assessment.confidence,
-        assessment.time_subject, assessment.model_version,
+        assessment.time_subject, assessment.model_version, assessment.precision,
+        payload.get("publish_earliest"), payload.get("publish_latest"),
     ])
     con.execute(
         """INSERT OR IGNORE INTO events
@@ -136,7 +165,24 @@ def record_and_assess(
     )
     evidence = _evidence(con, review_id)
     preserved_window = first_seen_window or _first_seen_window(old_review)
-    assessment = assess_date(evidence, timezone, _models(con), preserved_window)
+    preserved_window_is_precise = bool(
+        preserved_window
+        and preserved_window[1] - preserved_window[0] <= DENSE_PRECISION_TARGET
+        and (
+            first_seen_window is not None
+            or (
+                old_review
+                and old_review["precision"] in {"second", "minute", "hour"}
+            )
+        )
+    )
+    assessment = assess_date(
+        evidence,
+        timezone,
+        _models(con),
+        preserved_window,
+        first_seen_precision_trusted=preserved_window_is_precise,
+    )
     if _date_event_needed(old_review, assessment, timezone):
         _insert_date_event(
             con, target, review_id, scraped.place_name, assessment, timezone, delivery_state
@@ -168,7 +214,17 @@ def record_and_assess(
             ),
         )
     _update_calibration(con, review_id, old_review, evidence, timezone)
-    _schedule_dense(con, target["id"], review_id, parsed, assessment, observed_at, _models(con))
+    _schedule_dense(
+        con,
+        target["id"],
+        review_id,
+        parsed,
+        assessment,
+        observed_at,
+        _models(con),
+        evidence=evidence,
+        first_seen_window=preserved_window if preserved_window_is_precise else None,
+    )
     return assessment
 
 
@@ -287,15 +343,61 @@ def _schedule_dense(
     assessment: DateAssessment,
     now: datetime,
     models: dict[str, tuple[str, str]],
+    *,
+    evidence: list[DateEvidence] | None = None,
+    first_seen_window: tuple[datetime, datetime] | None = None,
 ) -> None:
     if not parsed or parsed.is_edit or parsed.unit not in {"day", "week", "month", "year"}:
         return
     if not assessment.earliest or not assessment.latest:
         return
-    if assessment.basis.endswith("_transition"):
+    width = assessment.latest - assessment.earliest
+    model_ready = parsed.unit not in {"month", "year"} or assessment.model_version not in {
+        None, "uncalibrated"
+    }
+    precise_first_seen = bool(
+        first_seen_window
+        and first_seen_window[1] - first_seen_window[0] <= DENSE_PRECISION_TARGET
+    )
+    trusted_hour_precision = bool(
+        width <= DENSE_PRECISION_TARGET
+        and assessment.precision in {"second", "minute", "hour"}
+        and (
+            assessment.basis == "public_timestamp"
+            or (assessment.basis.endswith("_transition") and model_ready)
+            or precise_first_seen
+        )
+    )
+    if trusted_hour_precision:
         con.execute(
             "DELETE FROM dense_targets WHERE target_id=? AND reason=?",
             (target_id, f"review:{review_id}:{parsed.unit}"),
+        )
+        return
+    parsed_evidence = [
+        parse_relative(item.relative_time)
+        for item in (evidence or [])
+        if item.crawl_complete
+    ]
+    parsed_evidence = [
+        value for value in parsed_evidence if value and not value.is_edit
+    ]
+    pending_confirmation = bool(
+        len(parsed_evidence) >= 2
+        and parsed_evidence[-2].unit == parsed_evidence[-1].unit == parsed.unit
+        and parsed_evidence[-1].count == parsed_evidence[-2].count + 1
+    )
+    if pending_confirmation:
+        # One old→new boundary observation is not enough. Keep the watch alive
+        # for the second identical new label required by assess_date().
+        _upsert_dense_target(
+            con,
+            target_id,
+            review_id,
+            parsed.unit,
+            now,
+            now,
+            now + timedelta(hours=2),
         )
         return
     model = models.get(parsed.unit, ("calendar", "uncalibrated"))[0]
@@ -304,20 +406,61 @@ def _schedule_dense(
     window_start = earliest_transition - timedelta(hours=6)
     window_end = latest_transition + timedelta(hours=6)
     if window_end < now or window_start > now + timedelta(hours=6):
+        con.execute(
+            "DELETE FROM dense_targets WHERE target_id=? AND reason=?",
+            (target_id, f"review:{review_id}:{parsed.unit}"),
+        )
         return
     if window_end - window_start > timedelta(hours=48):
+        con.execute(
+            "DELETE FROM dense_targets WHERE target_id=? AND reason=?",
+            (target_id, f"review:{review_id}:{parsed.unit}"),
+        )
         return
+    _upsert_dense_target(
+        con,
+        target_id,
+        review_id,
+        parsed.unit,
+        now,
+        window_start,
+        window_end,
+    )
+
+
+def _upsert_dense_target(
+    con: sqlite3.Connection,
+    target_id: int,
+    review_id: int,
+    unit: str,
+    now: datetime,
+    window_start: datetime,
+    window_end: datetime,
+) -> None:
     capped_end = min(window_end, window_start + timedelta(hours=48))
-    next_check = max(now, window_start) + timedelta(minutes=random.randint(30, 60))
+    next_check = max(now, window_start) + timedelta(
+        minutes=random.randint(*DENSE_INTERVAL_MINUTES)
+    )
     con.execute(
         """INSERT INTO dense_targets
         (target_id,reason,window_start,window_end,next_check_at,started_at,status,updated_at)
         VALUES(?,?,?,?,?,?, 'scheduled', ?)
-        ON CONFLICT(target_id) DO UPDATE SET reason=excluded.reason,
-        window_start=excluded.window_start,window_end=excluded.window_end,
-        next_check_at=excluded.next_check_at,status='scheduled',updated_at=excluded.updated_at""",
+        ON CONFLICT(target_id) DO UPDATE SET
+        reason=CASE WHEN dense_targets.status!='scheduled'
+                         OR excluded.next_check_at<dense_targets.next_check_at
+                    THEN excluded.reason ELSE dense_targets.reason END,
+        window_start=CASE WHEN dense_targets.status!='scheduled'
+                               OR excluded.next_check_at<dense_targets.next_check_at
+                          THEN excluded.window_start ELSE dense_targets.window_start END,
+        window_end=CASE WHEN dense_targets.status!='scheduled'
+                             OR excluded.next_check_at<dense_targets.next_check_at
+                        THEN excluded.window_end ELSE dense_targets.window_end END,
+        next_check_at=CASE WHEN dense_targets.status!='scheduled'
+                                OR excluded.next_check_at<dense_targets.next_check_at
+                           THEN excluded.next_check_at ELSE dense_targets.next_check_at END,
+        status='scheduled',updated_at=excluded.updated_at""",
         (
-            target_id, f"review:{review_id}:{parsed.unit}", window_start.isoformat(),
+            target_id, f"review:{review_id}:{unit}", window_start.isoformat(),
             capped_end.isoformat(), next_check.isoformat(), now.isoformat(), now.isoformat(),
         ),
     )
@@ -336,14 +479,3 @@ def due_dense_target_ids(con: sqlite3.Connection, now: datetime) -> set[int]:
             (now.isoformat(), now.isoformat()),
         )
     }
-
-
-def advance_dense_target(con: sqlite3.Connection, target_id: int, now: datetime) -> None:
-    con.execute(
-        """UPDATE dense_targets SET next_check_at=?,status=CASE WHEN window_end<? THEN 'expired' ELSE status END,
-        updated_at=? WHERE target_id=?""",
-        (
-            (now + timedelta(minutes=random.randint(30, 60))).isoformat(),
-            now.isoformat(), now.isoformat(), target_id,
-        ),
-    )

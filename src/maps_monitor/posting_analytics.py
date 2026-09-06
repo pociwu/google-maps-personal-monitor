@@ -10,7 +10,9 @@ from zoneinfo import ZoneInfo
 
 DISPLAY_TIMEZONE = ZoneInfo("Asia/Taipei")
 CONFIRMED_DATE_CONFIDENCE = {"confirmed_date", "confirmed_time"}
-MAX_ESTIMATED_TIME_HALF_WIDTH_SECONDS = 3 * 60 * 60
+# Only intervals whose total width is at most one hour may influence
+# time-of-day analytics. The midpoint therefore has at most +/- 30 minutes.
+MAX_ESTIMATED_TIME_HALF_WIDTH_SECONDS = 30 * 60
 WEEKDAY_LABELS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
 PERIODS = (
     ("凌晨", 0, 6),
@@ -126,7 +128,7 @@ def _time_for_row(
             return interval[1], "confirmed", _period_label(interval[1])
         return None, None, None
 
-    if interval is None:
+    if interval is None or _text(row, "precision") not in {"minute", "hour"}:
         return None, None, None
     lower, midpoint, upper = interval
     half_width = max(
@@ -164,7 +166,7 @@ def _weekday_two_hour_slot(
             return None
         return value.weekday(), value.hour // TWO_HOUR_SLOT_SIZE, "confirmed"
 
-    if interval is None:
+    if interval is None or _text(row, "precision") not in {"minute", "hour"}:
         return None
     lower, midpoint, upper = interval
     half_width = max(
@@ -533,7 +535,7 @@ def build_posting_analytics(
                 findings.append(
                     f"目前長期樣本較常在{top_period}發表"
                     f"（{top_period_count} 筆，{top_period_share:.0%}）；"
-                    "推算時間只納入誤差半徑不超過 3 小時者；"
+                    "推算時間只納入總區間不超過 1 小時者；"
                     "這仍是描述性統計，不能單獨證明固定規律。"
                 )
             else:

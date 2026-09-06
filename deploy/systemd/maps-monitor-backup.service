@@ -2,10 +2,12 @@
 Description=Back up Google Maps monitor data
 Requires=docker.service
 After=docker.service
-OnFailure=maps-monitor-failure.service
+OnFailure=maps-monitor-failure@%n.service
 
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/maps-monitor
 ExecStart=/usr/bin/docker compose run --rm monitor backup
-TimeoutStartSec=2h
+# A normal crawl may hold the shared consistency lock for up to four hours.
+# Leave enough time to wait for it and still complete the snapshot.
+TimeoutStartSec=6h

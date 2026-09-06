@@ -14,7 +14,7 @@ import httpx
 from .config import Settings
 from .crawler import ReadOnlyCrawler, _looks_truncated_text
 from .database import Database
-from .date_service import advance_dense_target, due_dense_target_ids, record_and_assess
+from .date_service import due_dense_target_ids, record_and_assess
 from .dates import parse_relative
 from .images import ImageArchive
 from .models import CrawlResult, ScrapedReview
@@ -184,9 +184,6 @@ class MonitorEngine:
                             target["name"], len(result.reviews),
                         )
                         await self.process_success(target, result, count_missing=not dense_only)
-                        if dense_only:
-                            advance_dense_target(self.db.connection, target["id"], utc_now())
-                            self.db.connection.commit()
                         successes += 1
                     except Exception as exc:
                         self.process_failure(target, exc)
@@ -213,6 +210,7 @@ class MonitorEngine:
         seen_keys: set[str] = set()
         review_images: list[dict] = []
         with self.db.transaction() as con:
+            con.execute("DELETE FROM dense_targets WHERE target_id=?", (target["id"],))
             for scraped in result.reviews:
                 seen_keys.add(scraped.review_key)
                 new_hash = stable_hash(scraped.event_content())

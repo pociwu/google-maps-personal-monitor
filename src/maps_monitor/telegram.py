@@ -43,6 +43,8 @@ def format_event(event_type: str, payload: dict[str, Any]) -> str:
     lines = [EVENT_LABELS.get(event_type, event_type)]
     if payload.get("target_name"):
         lines.append(f"人物：{payload['target_name']}")
+    if payload.get("source_unit"):
+        lines.append(f"服務：{payload['source_unit']}")
     if payload.get("place_name"):
         lines.append(f"店家：{payload['place_name']}")
     if payload.get("rating") is not None:
@@ -65,6 +67,8 @@ def format_event(event_type: str, payload: dict[str, Any]) -> str:
         lines.append(f"可信度：{payload['confidence']}")
     if payload.get("basis"):
         lines.append(f"推算依據：{payload['basis']}")
+    if payload.get("precision"):
+        lines.append(f"精度：{payload['precision']}")
     if payload.get("time_subject"):
         lines.append(f"時間主體：{payload['time_subject']}")
     if payload.get("publish_earliest") and payload.get("publish_latest"):

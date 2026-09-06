@@ -31,3 +31,36 @@ def test_deployment_scripts_do_not_modify_firewall():
     assert "ufw " not in scripts
     assert "iptables" not in scripts
     assert "firewall-cmd" not in scripts
+
+
+def test_systemd_failure_notification_identifies_the_real_source_unit():
+    systemd = ROOT / "deploy" / "systemd"
+    for name in (
+        "maps-monitor.service",
+        "maps-monitor-dense.service",
+        "maps-monitor-backup.service",
+    ):
+        unit = (systemd / name).read_text(encoding="utf-8")
+        assert "OnFailure=maps-monitor-failure@%n.service" in unit
+
+    handler = (systemd / "maps-monitor-failure@.service").read_text(encoding="utf-8")
+    assert "notify-system-failure --source-unit %i" in handler
+    assert not (systemd / "maps-monitor-failure.service").exists()
+
+
+def test_dense_dispatcher_checks_often_enough_for_hour_precision():
+    timer = (
+        ROOT / "deploy" / "systemd" / "maps-monitor-dense.timer"
+    ).read_text(encoding="utf-8")
+
+    assert "OnUnitInactiveSec=5min" in timer
+    assert "RandomizedDelaySec=1min" in timer
+    assert "AccuracySec=1s" in timer
+
+
+def test_backup_can_wait_longer_than_the_maximum_normal_crawl():
+    service = (
+        ROOT / "deploy" / "systemd" / "maps-monitor-backup.service"
+    ).read_text(encoding="utf-8")
+
+    assert "TimeoutStartSec=6h" in service

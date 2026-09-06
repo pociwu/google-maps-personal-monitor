@@ -87,6 +87,11 @@ class DateAssessment:
         return self.estimate.astimezone(ZoneInfo(timezone)).date().isoformat() if self.estimate else None
 
 
+def _precision_for_interval(earliest: datetime, latest: datetime) -> str:
+    seconds = max(0.0, (latest - earliest).total_seconds())
+    return "minute" if seconds <= 60 else "hour" if seconds <= 3600 else "date"
+
+
 def _parse_number(value: str) -> int | None:
     lowered = value.lower()
     if lowered in {"a", "an"}:
@@ -183,8 +188,7 @@ def _window_assessment(
         earliest = min(window.earliest for window in windows)
         latest = max(window.latest for window in windows)
     estimate = earliest + (latest - earliest) / 2
-    seconds = (latest - earliest).total_seconds()
-    precision = "minute" if seconds <= 60 else "hour" if seconds <= 3600 else "date"
+    precision = _precision_for_interval(earliest, latest)
     local_dates = {earliest.astimezone(ZoneInfo(timezone)).date(), latest.astimezone(ZoneInfo(timezone)).date()}
     confidence = "high_estimate" if len(local_dates) == 1 else "estimate"
     return DateAssessment(estimate, earliest, latest, precision, confidence, basis, subject)
@@ -214,8 +218,13 @@ def _transition_assessment(
         calibrated = new.unit not in {"month", "year"} or model_version != "uncalibrated"
         confirmed = calibrated and local_earliest == local_latest
         confidence = "confirmed_date" if confirmed else "high_estimate"
+        # A narrow observation gap is not an hour-level publication window
+        # until the month/year arithmetic itself has been calibrated.
+        precision = (
+            _precision_for_interval(earliest, latest) if calibrated else "date"
+        )
         return DateAssessment(
-            estimate, earliest, latest, "date", confidence,
+            estimate, earliest, latest, precision, confidence,
             f"{new.unit}_transition", "publish_time", model_version,
         )
     return None
@@ -226,31 +235,89 @@ def assess_date(
     timezone: str = "Asia/Taipei",
     models: dict[str, tuple[str, str]] | None = None,
     first_seen_window: tuple[datetime, datetime] | None = None,
+    first_seen_precision_trusted: bool | None = None,
 ) -> DateAssessment:
     items = sorted((item for item in evidence if item.crawl_complete), key=lambda item: item.observed_at)
-    exact = [item.exact_timestamp for item in items if item.exact_timestamp]
-    if len(exact) >= 2 and exact[-1] == exact[-2]:
-        latest_parsed = parse_relative(items[-1].relative_time) if items else None
-        subject = "last_edit" if latest_parsed and latest_parsed.is_edit else "publish_time"
-        return DateAssessment(exact[-1], exact[-1], exact[-1], "second", "confirmed_time", "public_timestamp", subject)
-    if first_seen_window:
-        earliest, latest = first_seen_window
-        estimate = earliest + (latest - earliest) / 2
-        same_date = earliest.astimezone(ZoneInfo(timezone)).date() == latest.astimezone(ZoneInfo(timezone)).date()
-        return DateAssessment(
-            estimate, earliest, latest, "hour" if latest - earliest <= timedelta(hours=1) else "date",
-            "confirmed_date" if same_date else "high_estimate", "first_seen_interval", "publish_time",
-        )
+    precise_first_seen = bool(
+        first_seen_window
+        and first_seen_window[1] - first_seen_window[0] <= timedelta(hours=1)
+        and first_seen_precision_trusted is not False
+    )
+    for previous, current in reversed(list(zip(items, items[1:], strict=False))):
+        if (
+            previous.exact_timestamp
+            and current.exact_timestamp
+            and previous.exact_timestamp == current.exact_timestamp
+        ):
+            latest_parsed = parse_relative(current.relative_time)
+            subject = "last_edit" if latest_parsed and latest_parsed.is_edit else "publish_time"
+            exact = current.exact_timestamp
+            return DateAssessment(
+                exact, exact, exact, "second", "confirmed_time", "public_timestamp", subject
+            )
     transition = _transition_assessment(items, timezone, models or {})
     if transition:
+        if first_seen_window:
+            first_seen_earliest, first_seen_latest = first_seen_window
+            earliest = max(transition.earliest, first_seen_earliest)
+            latest = min(transition.latest, first_seen_latest)
+            if earliest <= latest:
+                same_date = (
+                    earliest.astimezone(ZoneInfo(timezone)).date()
+                    == latest.astimezone(ZoneInfo(timezone)).date()
+                )
+                confidence = transition.confidence
+                if confidence == "confirmed_date" and not same_date:
+                    confidence = "high_estimate"
+                precision = (
+                    _precision_for_interval(earliest, latest)
+                    if transition.precision != "date" or precise_first_seen
+                    else "date"
+                )
+                return DateAssessment(
+                    earliest + (latest - earliest) / 2,
+                    earliest,
+                    latest,
+                    precision,
+                    confidence,
+                    transition.basis,
+                    transition.time_subject,
+                    transition.model_version,
+                )
         return transition
     all_windows = [
         window for item in items
         if (window := parse_relative_time(item.relative_time, item.observed_at))
     ]
     publish_windows = [window for window in all_windows if not window.is_edit]
+    if first_seen_window:
+        publish_windows.append(DateWindow(*first_seen_window))
     if publish_windows:
-        return _window_assessment(publish_windows, timezone)
+        basis = "first_seen_interval" if first_seen_window else "relative_window"
+        result = _window_assessment(publish_windows, timezone, basis, "publish_time")
+        coarse_relative_evidence = any(
+            window.parsed and window.parsed.unit in {"day", "week", "month", "year"}
+            for window in publish_windows
+        )
+        if (
+            result.precision in {"minute", "hour"}
+            and coarse_relative_evidence
+            and not precise_first_seen
+        ):
+            # Repeated coarse labels can create a numerically narrow
+            # intersection before a boundary change has been confirmed. Keep
+            # it date-level until the old/new/new transition exists.
+            return DateAssessment(
+                result.estimate,
+                result.earliest,
+                result.latest,
+                "date",
+                result.confidence,
+                result.basis,
+                result.time_subject,
+                result.model_version,
+            )
+        return result
     edited_windows = [window for window in all_windows if window.is_edit]
     if edited_windows:
         result = _window_assessment(edited_windows, timezone, "edit_relative_window", "last_edit")

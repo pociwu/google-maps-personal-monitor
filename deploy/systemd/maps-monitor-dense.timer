@@ -1,11 +1,11 @@
 [Unit]
-Description=Check due dense Google Maps date observations every 30 to 60 minutes
+Description=Check due dense Google Maps date observations every 5 to 6 minutes
 
 [Timer]
 OnBootSec=15min
-OnUnitInactiveSec=30min
-RandomizedDelaySec=30min
-AccuracySec=1min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=1min
+AccuracySec=1s
 Persistent=true
 Unit=maps-monitor-dense.service
 

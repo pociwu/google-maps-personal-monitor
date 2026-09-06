@@ -19,7 +19,8 @@ find /opt/maps-monitor/state -type d -exec chmod 2750 {} +
 find /opt/maps-monitor/state -type f -exec chmod 0640 {} +
 install -m 0644 deploy/systemd/maps-monitor.service /etc/systemd/system/
 install -m 0644 deploy/systemd/maps-monitor.timer /etc/systemd/system/
-install -m 0644 deploy/systemd/maps-monitor-failure.service /etc/systemd/system/
+install -m 0644 deploy/systemd/maps-monitor-failure@.service /etc/systemd/system/
+rm -f /etc/systemd/system/maps-monitor-failure.service
 install -m 0644 deploy/systemd/maps-monitor-dense.service /etc/systemd/system/
 install -m 0644 deploy/systemd/maps-monitor-dense.timer /etc/systemd/system/
 install -m 0644 deploy/systemd/maps-monitor-backup.service /etc/systemd/system/

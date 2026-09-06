@@ -17,6 +17,23 @@ from .operations import backup, export_reviews, refresh_dashboard_snapshot
 from .telegram import TelegramSender
 
 
+class MonitorLockBusy(RuntimeError):
+    """A scheduled crawl found another crawl already holding the process lock."""
+
+
+CRAWL_COMMANDS = {"run", "run-and-send", "dense-run", "dense-run-and-send"}
+DENSE_COMMANDS = {"dense-run", "dense-run-and-send"}
+SERIALIZED_COMMANDS = CRAWL_COMMANDS | {
+    "send",
+    "backup",
+    "build-thumbnails",
+    "refresh-dashboard",
+    "test-telegram",
+    "notify-system-failure",
+}
+SNAPSHOT_COMMANDS = CRAWL_COMMANDS | {"build-thumbnails", "refresh-dashboard"}
+
+
 def _sender(settings: Settings, db: Database) -> TelegramSender:
     if not settings.telegram_token or not settings.telegram_chat_id:
         raise RuntimeError("缺少 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID")
@@ -37,7 +54,7 @@ def configure_logging() -> None:
 
 
 @contextmanager
-def _process_lock(settings: Settings):
+def _process_lock(settings: Settings, *, wait: bool = False):
     lock_path = settings.data_dir.parent / "monitor.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     handle = lock_path.open("a+")
@@ -45,15 +62,17 @@ def _process_lock(settings: Settings):
         if os.name == "nt":
             import msvcrt
             try:
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                mode = msvcrt.LK_LOCK if wait else msvcrt.LK_NBLCK
+                msvcrt.locking(handle.fileno(), mode, 1)
             except OSError as exc:
-                raise RuntimeError("另一輪監控正在執行") from exc
+                raise MonitorLockBusy("另一輪監控正在執行") from exc
         else:
             import fcntl
             try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                flags = fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB)
+                fcntl.flock(handle.fileno(), flags)
             except OSError as exc:
-                raise RuntimeError("另一輪監控正在執行") from exc
+                raise MonitorLockBusy("另一輪監控正在執行") from exc
         yield
     finally:
         handle.close()
@@ -91,7 +110,8 @@ def build_parser() -> argparse.ArgumentParser:
     test = sub.add_parser("test-telegram", help="傳送 Telegram 測試訊息")
     test.add_argument("--message", default="Google Maps 評論監控測試成功")
     failure = sub.add_parser("notify-system-failure", help="由 systemd 失敗服務呼叫")
-    failure.add_argument("--message", default="systemd 偵測到監控服務失敗")
+    failure.add_argument("--source-unit")
+    failure.add_argument("--message")
     export = sub.add_parser("export", help="匯出評論")
     export.add_argument("--format", choices=("csv", "json"), required=True)
     export.add_argument("--output", type=Path, required=True)
@@ -100,27 +120,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    configure_logging()
-    args = build_parser().parse_args(argv)
-    settings = load_settings(args.config)
+def _execute_command(args: argparse.Namespace, settings: Settings) -> int:
     db = Database(settings.database)
     snapshot = settings.data_dir.parent / "web" / "monitor.sqlite3"
     try:
         if args.command == "run":
-            with _process_lock(settings):
-                asyncio.run(MonitorEngine(settings, db).run())
+            asyncio.run(MonitorEngine(settings, db).run())
         elif args.command == "send":
             asyncio.run(_sender(settings, db).send_pending())
         elif args.command == "run-and-send":
-            with _process_lock(settings):
-                return asyncio.run(_run_and_send(settings, db))
+            return asyncio.run(_run_and_send(settings, db))
         elif args.command == "dense-run":
-            with _process_lock(settings):
-                asyncio.run(MonitorEngine(settings, db).run(dense_only=True))
+            asyncio.run(MonitorEngine(settings, db).run(dense_only=True))
         elif args.command == "dense-run-and-send":
-            with _process_lock(settings):
-                return asyncio.run(_run_and_send(settings, db, dense_only=True))
+            return asyncio.run(_run_and_send(settings, db, dense_only=True))
         elif args.command == "backup":
             print(backup(db, settings))
         elif args.command == "build-thumbnails":
@@ -136,7 +149,12 @@ def main(argv: list[str] | None = None) -> int:
             db.create_event("test", {"message": args.message})
             asyncio.run(_sender(settings, db).send_pending())
         elif args.command == "notify-system-failure":
-            db.create_event("system_failure", {"error": args.message})
+            source = args.source_unit or "未知服務"
+            message = args.message or f"systemd 偵測到 {source} 執行失敗"
+            db.create_event(
+                "system_failure",
+                {"error": message, "source_unit": args.source_unit},
+            )
             asyncio.run(_sender(settings, db).send_pending())
         elif args.command == "export":
             count = export_reviews(db, args.output, args.format, args.target)
@@ -157,7 +175,8 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         active_error = sys.exc_info()[0] is not None
         try:
-            refresh_dashboard_snapshot(db, snapshot)
+            if args.command in SNAPSHOT_COMMANDS:
+                refresh_dashboard_snapshot(db, snapshot)
         except Exception:
             if active_error:
                 logging.exception("儀表板快照更新失敗")
@@ -165,6 +184,23 @@ def main(argv: list[str] | None = None) -> int:
                 raise
         finally:
             db.close()
+
+
+def main(argv: list[str] | None = None) -> int:
+    configure_logging()
+    args = build_parser().parse_args(argv)
+    settings = load_settings(args.config)
+    if args.command in DENSE_COMMANDS:
+        try:
+            with _process_lock(settings):
+                return _execute_command(args, settings)
+        except MonitorLockBusy:
+            logging.info("另一輪監控正在執行，本次密集巡查略過")
+            return 0
+    if args.command in SERIALIZED_COMMANDS:
+        with _process_lock(settings, wait=True):
+            return _execute_command(args, settings)
+    return _execute_command(args, settings)
 
 
 if __name__ == "__main__":

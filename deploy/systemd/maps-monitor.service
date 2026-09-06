@@ -3,7 +3,7 @@ Description=Google Maps contributor review monitor
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
-OnFailure=maps-monitor-failure.service
+OnFailure=maps-monitor-failure@%n.service
 
 [Service]
 Type=oneshot

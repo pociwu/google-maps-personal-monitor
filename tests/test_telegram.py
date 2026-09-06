@@ -70,3 +70,15 @@ def test_modified_message_contains_before_and_after_summary():
     assert "星等變更：5 → 4" in message
     assert "修改前：原本內容" in message
     assert "修改後：修改後內容" in message
+
+
+def test_system_failure_message_names_the_source_unit():
+    message = format_event(
+        "system_failure",
+        {
+            "source_unit": "maps-monitor-dense.service",
+            "error": "systemd 偵測到 maps-monitor-dense.service 執行失敗",
+        },
+    )
+
+    assert "服務：maps-monitor-dense.service" in message

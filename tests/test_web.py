@@ -229,15 +229,15 @@ def test_posting_time_analytics_page_separates_exact_and_estimated_samples(
         publish_estimate='2026-07-28T03:04:00+00:00',
         publish_earliest='2026-07-28T03:04:00+00:00',
         publish_latest='2026-07-28T03:04:00+00:00',
-        confidence='confirmed_time',time_subject='publish_time'
+        precision='second',confidence='confirmed_time',time_subject='publish_time'
         WHERE id=1"""
     )
     database.connection.execute(
         """UPDATE reviews SET
         publish_estimate='2025-07-30T08:36:00+00:00',
-        publish_earliest='2025-07-30T06:21:00+00:00',
-        publish_latest='2025-07-30T10:51:00+00:00',
-        confidence='high_estimate',time_subject='publish_time'
+        publish_earliest='2025-07-30T08:06:00+00:00',
+        publish_latest='2025-07-30T09:06:00+00:00',
+        precision='hour',confidence='high_estimate',time_subject='publish_time'
         WHERE id=2"""
     )
     database.connection.execute(
@@ -273,7 +273,7 @@ def test_posting_time_analytics_page_separates_exact_and_estimated_samples(
     assert "完整 1 · 推算 1" in selected.text
     assert "星期 × 2 小時時段熱圖" in selected.text
     assert "X 軸是星期，Y 軸是台灣時間，每 2 小時一格" in selected.text
-    assert "納入 1 ·" in selected.text
+    assert "納入 2 ·" in selected.text
     assert 'role="region" aria-labelledby="weekday-time-chart-title" tabindex="0"' in selected.text
     assert 'aria-label="星期一">一</th>' in selected.text
     assert 'scope="row">10:00–11:59</th>' in selected.text
@@ -389,7 +389,8 @@ def test_dashboard_uncertainty_and_high_confidence_interval(tmp_path, monkeypatc
         """UPDATE reviews
         SET publish_estimate='2026-07-28T03:00:00+00:00',
             publish_earliest='2026-07-28T02:30:00+00:00',
-            publish_latest='2026-07-28T03:30:00+00:00'
+            publish_latest='2026-07-28T03:30:00+00:00',
+            precision='hour'
         WHERE id=1"""
     )
     database.connection.commit()
@@ -398,7 +399,7 @@ def test_dashboard_uncertainty_and_high_confidence_interval(tmp_path, monkeypatc
     client = _client(monkeypatch, database_path, image_root)
     dashboard = client.get("/")
     assert "發表日期：約 2025-07-30（± 10 日）" in dashboard.text
-    assert "發表日期：2026-07-28（±" not in dashboard.text
+    assert "發表時間：約 2026-07-28 11:00（± 30 分）" in dashboard.text
 
     database = Database(database_path)
     database.connection.execute(
@@ -411,7 +412,8 @@ def test_dashboard_uncertainty_and_high_confidence_interval(tmp_path, monkeypatc
     database.connection.commit()
     database.close()
     hourly_dashboard = client.get("/")
-    assert "發表日期：約 2025-07-30 16:36（± 3 小時）" in hourly_dashboard.text
+    assert "發表日期：約 2025-07-30" in hourly_dashboard.text
+    assert "發表日期：約 2025-07-30 16:36" not in hourly_dashboard.text
 
     database = Database(database_path)
     database.connection.execute(
@@ -423,7 +425,8 @@ def test_dashboard_uncertainty_and_high_confidence_interval(tmp_path, monkeypatc
     database.connection.commit()
     database.close()
     minute_dashboard = client.get("/")
-    assert "發表日期：約 2025-07-30 16:36（± 35 分）" in minute_dashboard.text
+    assert "發表日期：約 2025-07-30" in minute_dashboard.text
+    assert "發表時間：約 2025-07-30 16:36" not in minute_dashboard.text
 
     evidence = client.get("/reviews/1/evidence")
     assert "高可信日期確認區間" in evidence.text
@@ -431,6 +434,29 @@ def test_dashboard_uncertainty_and_high_confidence_interval(tmp_path, monkeypatc
 
     estimated_evidence = client.get("/reviews/2/evidence")
     assert "高可信日期確認區間" not in estimated_evidence.text
+
+
+def test_dashboard_does_not_claim_hour_precision_for_untrusted_model(
+    tmp_path, monkeypatch
+):
+    database_path, image_root, _digest = _seed(tmp_path)
+    database = Database(database_path)
+    database.connection.execute(
+        """UPDATE reviews SET
+        publish_estimate='2026-07-28T03:15:00+00:00',
+        publish_earliest='2026-07-28T03:00:00+00:00',
+        publish_latest='2026-07-28T03:30:00+00:00',
+        precision='date',confidence='high_estimate',basis='month_transition',
+        date_model_version='uncalibrated'
+        WHERE id=1"""
+    )
+    database.connection.commit()
+    database.close()
+
+    dashboard = _client(monkeypatch, database_path, image_root).get("/")
+
+    assert "發表日期：約 2026-07-28" in dashboard.text
+    assert "發表時間：約 2026-07-28 11:15" not in dashboard.text
 
 
 def test_dashboard_can_add_and_remove_validated_target_without_password(tmp_path, monkeypatch):

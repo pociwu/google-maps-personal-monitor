@@ -58,6 +58,46 @@ def test_adjacent_transition_needs_second_confirmation():
     assert result.estimate_date("Asia/Taipei") == "2026-07-09"
 
 
+def test_subhour_transition_keeps_hour_precision():
+    evidence = [
+        DateEvidence(datetime(2026, 7, 23, 10, 0, tzinfo=UTC), "1 週前"),
+        DateEvidence(datetime(2026, 7, 23, 10, 45, tzinfo=UTC), "2 週前"),
+        DateEvidence(datetime(2026, 7, 23, 11, 15, tzinfo=UTC), "2 週前"),
+    ]
+
+    result = assess_date(evidence, "Asia/Taipei")
+
+    assert (result.latest - result.earliest).total_seconds() == 45 * 60
+    assert result.precision == "hour"
+
+
+def test_first_seen_window_intersects_google_hour_evidence():
+    observed = datetime(2026, 7, 23, 12, 0, tzinfo=UTC)
+    result = assess_date(
+        [DateEvidence(observed, "2 小時前")],
+        "Asia/Taipei",
+        first_seen_window=(
+            datetime(2026, 7, 23, 4, 0, tzinfo=UTC),
+            observed,
+        ),
+    )
+
+    assert result.earliest == datetime(2026, 7, 23, 9, 0, tzinfo=UTC)
+    assert result.latest == datetime(2026, 7, 23, 10, 0, tzinfo=UTC)
+    assert result.precision == "hour"
+
+
+def test_exact_timestamp_must_appear_in_adjacent_complete_observations():
+    exact = datetime(2026, 7, 9, 3, 2, 1, tzinfo=UTC)
+    evidence = [
+        DateEvidence(datetime(2026, 7, 10, 0, tzinfo=UTC), "1 天前", exact),
+        DateEvidence(datetime(2026, 7, 10, 1, tzinfo=UTC), "1 天前"),
+        DateEvidence(datetime(2026, 7, 10, 2, tzinfo=UTC), "1 天前", exact),
+    ]
+
+    assert assess_date(evidence).confidence != "confirmed_time"
+
+
 def test_transition_crossing_taipei_midnight_is_not_confirmed():
     evidence = [
         DateEvidence(datetime(2026, 7, 23, 15, 30, tzinfo=UTC), "1 週前"),
@@ -103,3 +143,43 @@ def test_month_transition_is_not_confirmed_before_calibration():
     result = assess_date(evidence)
     assert result.basis == "month_transition"
     assert result.confidence == "high_estimate"
+    assert result.precision == "date"
+
+
+def test_coarse_relative_intersection_is_not_hour_precision_before_transition():
+    evidence = [
+        DateEvidence(datetime(2026, 7, 11, 11, 30, tzinfo=UTC), "1 天前"),
+        DateEvidence(datetime(2026, 7, 12, 11, 0, tzinfo=UTC), "1 天前"),
+    ]
+
+    result = assess_date(evidence, "Asia/Taipei")
+
+    assert (result.latest - result.earliest).total_seconds() == 30 * 60
+    assert result.basis == "relative_window"
+    assert result.precision == "date"
+
+
+def test_trusted_first_seen_window_survives_uncalibrated_month_transition():
+    evidence = [
+        DateEvidence(datetime(2026, 3, 9, 1, tzinfo=UTC), "1 個月前"),
+        DateEvidence(datetime(2026, 3, 9, 2, tzinfo=UTC), "2 個月前"),
+        DateEvidence(datetime(2026, 3, 9, 2, 30, tzinfo=UTC), "2 個月前"),
+    ]
+    first_seen = (
+        datetime(2026, 1, 9, 1, 15, tzinfo=UTC),
+        datetime(2026, 1, 9, 1, 45, tzinfo=UTC),
+    )
+
+    trusted = assess_date(
+        evidence,
+        first_seen_window=first_seen,
+        first_seen_precision_trusted=True,
+    )
+    untrusted = assess_date(
+        evidence,
+        first_seen_window=first_seen,
+        first_seen_precision_trusted=False,
+    )
+
+    assert trusted.precision == "hour"
+    assert untrusted.precision == "date"
