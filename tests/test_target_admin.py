@@ -50,9 +50,71 @@ def test_canonicalizes_only_public_google_contributor_review_urls():
         "https://evil.example/maps/contrib/123/reviews",
         "https://www.google.com/maps/place/123",
         "https://www.google.com/maps/contrib/not-numeric/reviews",
+        "https://www.google.com/maps/contrib/123/reviews/not-a-map-view",
+        "https://maps.app.goo.gl.evil.example/allowedToken",
     ):
         with pytest.raises(TargetAdminError, match="invalid"):
             canonicalize_contributor_url(value)
+
+
+def test_canonicalizes_contributor_url_with_map_view_suffix():
+    value = (
+        "https://www.google.com/maps/contrib/102566008114863152802/reviews/"
+        "@23.7873829,120.1935658,13z?utm_campaign=ml-ardl-mgrc&g_ep=test"
+    )
+
+    assert canonicalize_contributor_url(value) == (
+        "https://www.google.com/maps/contrib/102566008114863152802/reviews",
+        "102566008114863152802",
+    )
+
+
+def test_live_validation_resolves_google_maps_short_url(monkeypatch):
+    real_client = httpx.AsyncClient
+    short_url = "https://maps.app.goo.gl/72mExLHqdaz3QUNz9"
+    canonical = "https://www.google.com/maps/contrib/102566008114863152802/reviews"
+
+    async def handler(request):
+        if str(request.url) == short_url:
+            return httpx.Response(
+                302,
+                request=request,
+                headers={
+                    "Location": (
+                        "https://www.google.com/maps/contrib/"
+                        "102566008114863152802?utm_source=mstt_0"
+                    )
+                },
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            text="<html><title>測試人物 - Google Maps</title></html>",
+        )
+
+    def client_factory(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(target_admin.httpx, "AsyncClient", client_factory)
+    assert asyncio.run(validate_contributor_url(short_url)) == (canonical, "測試人物")
+
+
+def test_short_url_rejects_redirect_outside_google(monkeypatch):
+    real_client = httpx.AsyncClient
+
+    async def handler(request):
+        return httpx.Response(
+            302,
+            request=request,
+            headers={"Location": "https://evil.example/maps/contrib/123/reviews"},
+        )
+
+    def client_factory(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(target_admin.httpx, "AsyncClient", client_factory)
+    with pytest.raises(TargetAdminError, match="unavailable"):
+        asyncio.run(validate_contributor_url("https://maps.app.goo.gl/allowedToken"))
 
 
 def test_add_remove_duplicate_and_limit(tmp_path):
@@ -68,7 +130,7 @@ def test_add_remove_duplicate_and_limit(tmp_path):
     with pytest.raises(TargetAdminError, match="duplicate"):
         add_target(
             config,
-            "https://www.google.com/maps/contrib/2/reviews",
+            "https://www.google.com/maps/contrib/2/reviews/@23.5,120.5,13z?hl=zh-TW",
             "重複",
         )
 

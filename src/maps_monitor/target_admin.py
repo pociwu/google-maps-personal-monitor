@@ -4,7 +4,7 @@ import html
 import os
 import re
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
 import yaml
@@ -13,7 +13,19 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
 
-CONTRIBUTOR_PATH = re.compile(r"^/maps/contrib/(?P<id>[0-9]+)/reviews/?$")
+CONTRIBUTOR_PATH = re.compile(
+    r"^/maps/contrib/(?P<id>[0-9]+)(?:/reviews(?:/@-?[0-9]+(?:\.[0-9]+)?,-?[0-9]+(?:\.[0-9]+)?,[0-9]+(?:\.[0-9]+)?z)?)?/?$"
+)
+SHORT_LINK_PATH = re.compile(r"^/[A-Za-z0-9_-]+/?$")
+SHORT_LINK_HOST = "maps.app.goo.gl"
+GOOGLE_REDIRECT_HOSTS = {
+    SHORT_LINK_HOST,
+    "google.com",
+    "www.google.com",
+    "maps.google.com",
+}
+REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+MAX_SHORT_LINK_REDIRECTS = 5
 TITLE_PATTERNS = (
     re.compile(
         r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)',
@@ -71,6 +83,54 @@ def canonicalize_contributor_url(value: str) -> tuple[str, str]:
         ("https", "www.google.com", f"/maps/contrib/{contributor_id}/reviews", "", "")
     )
     return canonical, contributor_id
+
+
+def _safe_https_url(value: str, hosts: set[str]) -> bool:
+    try:
+        parsed = urlsplit(value.strip())
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname in hosts
+        and parsed.username is None
+        and parsed.password is None
+        and port in {None, 443}
+    )
+
+
+def _is_google_maps_short_url(value: str) -> bool:
+    if not _safe_https_url(value, {SHORT_LINK_HOST}):
+        return False
+    parsed = urlsplit(value.strip())
+    return bool(SHORT_LINK_PATH.fullmatch(parsed.path)) and not parsed.fragment
+
+
+async def _resolve_short_url(client: httpx.AsyncClient, value: str) -> tuple[str, str]:
+    if not _is_google_maps_short_url(value):
+        raise TargetAdminError("invalid")
+    current = value.strip()
+    for _hop in range(MAX_SHORT_LINK_REDIRECTS):
+        try:
+            response = await client.get(current, follow_redirects=False)
+        except httpx.HTTPError as exc:
+            raise TargetAdminError("unavailable") from exc
+        if response.status_code not in REDIRECT_STATUSES:
+            try:
+                return canonicalize_contributor_url(str(response.url))
+            except TargetAdminError as exc:
+                raise TargetAdminError("unavailable") from exc
+        location = response.headers.get("location")
+        if not location:
+            raise TargetAdminError("unavailable")
+        current = urljoin(str(response.url), location)
+        try:
+            return canonicalize_contributor_url(current)
+        except TargetAdminError:
+            if not _safe_https_url(current, GOOGLE_REDIRECT_HOSTS):
+                raise TargetAdminError("unavailable") from None
+    raise TargetAdminError("unavailable")
 
 
 def _clean_name(value: str) -> str | None:
@@ -148,14 +208,17 @@ async def _name_from_rendered_page(url: str, contributor_id: str) -> str | None:
 
 
 async def validate_contributor_url(value: str) -> tuple[str, str]:
-    canonical, contributor_id = canonicalize_contributor_url(value)
     try:
         async with httpx.AsyncClient(
-            follow_redirects=True,
+            follow_redirects=False,
             timeout=20.0,
             headers={"User-Agent": "Mozilla/5.0 maps-monitor-url-validator"},
         ) as client:
-            response = await client.get(canonical)
+            try:
+                canonical, contributor_id = canonicalize_contributor_url(value)
+            except TargetAdminError:
+                canonical, contributor_id = await _resolve_short_url(client, value)
+            response = await client.get(canonical, follow_redirects=True)
             response.raise_for_status()
     except httpx.HTTPError as exc:
         raise TargetAdminError("unavailable") from exc
@@ -199,9 +262,17 @@ def _write_document(path: Path, document: dict) -> None:
 
 
 def add_target(path: Path, url: str, name: str) -> None:
+    canonical, _contributor_id = canonicalize_contributor_url(url)
     document = _document(path)
     targets = document["targets"]
-    if any(str(item.get("url", "")).strip() == url for item in targets):
+    try:
+        existing_urls = {
+            canonicalize_contributor_url(str(item.get("url", "")))[0]
+            for item in targets
+        }
+    except (AttributeError, TargetAdminError) as exc:
+        raise TargetAdminError("config_error") from exc
+    if canonical in existing_urls:
         raise TargetAdminError("duplicate")
     if len(targets) >= 10:
         raise TargetAdminError("limit")
@@ -211,7 +282,7 @@ def add_target(path: Path, url: str, name: str) -> None:
     while unique_name in existing_names:
         unique_name = f"{name} ({suffix})"
         suffix += 1
-    targets.append({"name": unique_name, "url": url, "enabled": True})
+    targets.append({"name": unique_name, "url": canonical, "enabled": True})
     _write_document(path, document)
 
 

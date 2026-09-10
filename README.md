@@ -101,7 +101,7 @@ http://100.x.x.x:8000/
 - 可拖曳貢獻者卡片調整順序，順序永久保存於監控設定；「全部貢獻者」固定在最前面。
 - 每張卡片提供公開 Google Maps 個人頁面連結，可在新分頁拜訪。
 - 每張卡片可開啟該貢獻者的發文時間分析；首頁上方也可查看全部貢獻者總覽。
-- 可在首頁輸入公開貢獻者評論網址；通過格式與連線驗證後，以唯讀瀏覽器辨識公開頁面的貢獻者名稱，再加入下一輪巡查。
+- 可在首頁輸入公開貢獻者評論網址；接受標準 `/reviews`、帶座標與查詢參數的完整網址，以及 `https://maps.app.goo.gl/...` Google Maps 短網址。短網址只沿 HTTPS Google 主機白名單解析，最後統一保存為標準評論網址；通過連線驗證後，以唯讀瀏覽器辨識公開頁面的貢獻者名稱，再加入下一輪巡查。
 - 每張貢獻者卡片可停止監控；只移出設定清單，不刪除評論、證據或圖片。
 - 新增、移除與排序不需要密碼；能開啟首頁的人都可以操作。
 - 支援店家／內容搜尋、狀態與星等篩選。
@@ -229,7 +229,7 @@ sudo systemctl stop maps-monitor.timer maps-monitor-web.service
 cd /opt
 stamp="$(date +%Y%m%d-%H%M%S)"
 sudo mv maps-monitor "maps-monitor.pre-git-${stamp}"
-sudo git clone --branch v0.8.0 --depth 1 \
+sudo git clone --branch v0.8.1 --depth 1 \
   https://github.com/pociwu/google-maps-personal-monitor.git maps-monitor
 sudo cp "maps-monitor.pre-git-${stamp}/.env" maps-monitor/.env
 sudo cp "maps-monitor.pre-git-${stamp}/config/targets.yaml" \
@@ -249,7 +249,7 @@ Ubuntu 只部署版本標籤，不直接跟隨 `main`：
 
 ```bash
 cd /opt/maps-monitor
-sudo ./deploy/update.sh v0.8.0
+sudo ./deploy/update.sh v0.8.1
 ```
 
 更新程式會先備份、取得指定標籤、重建映像、補建縮圖並執行 Web 健康檢查；失敗時回到部署前的程式版本。
