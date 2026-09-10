@@ -11,7 +11,7 @@ dependencies = [
   "httpx==0.28.1",
   "fastapi==0.116.1",
   "Jinja2==3.1.6",
-  "Pillow==11.3.0",
+  "Pillow==12.3.0",
   "playwright==1.61.0",
   "PyYAML==6.0.2",
   "tzdata==2025.2",
