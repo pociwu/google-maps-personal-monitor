@@ -105,14 +105,26 @@ def format_event(event_type: str, payload: dict[str, Any]) -> str:
     if message:
         lines.append(str(message))
     text = payload.get("text")
+    if event_type == "modified":
+        for field, label in (("place_name", "店家名稱／地址"), ("place_url", "店家網址")):
+            previous_key = f"previous_{field}"
+            if previous_key in payload and payload[previous_key] != payload.get(field):
+                lines.extend([
+                    "", f"{label}變更：",
+                    f"修改前：{_preview(payload[previous_key], 500)}",
+                    f"修改後：{_preview(payload.get(field), 500)}",
+                ])
     if event_type == "modified" and "previous_text" in payload:
-        lines.extend(
-            [
-                "",
-                f"修改前：{_preview(payload.get('previous_text'))}",
-                f"修改後：{_preview(text)}",
-            ]
-        )
+        if payload.get("previous_text") == text:
+            lines.extend(["", "評論文字：未變更"])
+        else:
+            lines.append("\n評論文字變更：")
+            lines.extend(
+                [
+                    f"修改前：{_preview(payload.get('previous_text'))}",
+                    f"修改後：{_preview(text)}",
+                ]
+            )
     elif text:
         lines.extend(["", str(text)])
     error = payload.get("error")

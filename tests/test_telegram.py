@@ -82,3 +82,20 @@ def test_system_failure_message_names_the_source_unit():
     )
 
     assert "服務：maps-monitor-dense.service" in message
+
+
+def test_address_change_shows_actual_difference_without_duplicate_body():
+    message = format_event("modified", {
+        "previous_place_name": "店家華南路30號",
+        "place_name": "店家No. 30, Huanan Rd",
+        "previous_text": "正文相同",
+        "text": "正文相同",
+        "previous_place_url": None,
+        "place_url": "https://www.google.com/maps/place/example",
+    })
+    assert "店家名稱／地址變更：" in message
+    assert "修改前：店家華南路30號" in message
+    assert "修改後：店家No. 30, Huanan Rd" in message
+    assert "店家網址變更：" in message
+    assert "評論文字：未變更" in message
+    assert "正文相同" not in message

@@ -318,6 +318,7 @@ class MonitorEngine:
                                 "previous_text": existing["body"],
                                 "previous_rating": existing["rating"],
                                 "previous_place_name": existing["place_name"],
+                                "previous_place_url": existing["place_url"],
                             }
                         event_id = _insert_event(
                             con, event_type, target["id"], review_id,
